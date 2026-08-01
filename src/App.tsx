@@ -7,12 +7,18 @@ import type { ActivityType, Lead, LeadStatus } from './types'
 type View = 'today' | 'leads' | 'trials' | 'activity' | 'marketing' | 'settings'
 
 const statusLabels: Record<LeadStatus, string> = {
-  new: 'New', contacting: 'Contacting', trial_booked: 'Trial booked', trial_complete: 'Trial complete', enrolled: 'Enrolled', lost: 'Lost',
+  new: 'New', contacting: 'Contacting', trial_booked: 'Trial booked', trial_complete: 'Trial complete',
+  nurture: 'Nurture', long_term_nurture: 'Long-term nurture', enrolled: 'Enrolled', lost: 'Lost',
 }
 
 const formatDate = (value: string | Date, includeTime = true) => new Intl.DateTimeFormat('en-US', {
   weekday: 'short', month: 'short', day: 'numeric', ...(includeTime ? { hour: 'numeric', minute: '2-digit' } : {}),
 }).format(new Date(value))
+
+const toDateTimeInput = (date: Date) => {
+  const offset = date.getTimezoneOffset()
+  return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16)
+}
 
 function App() {
   const [entered, setEntered] = useState(false)
@@ -93,15 +99,21 @@ function NavButton({ active, onClick, icon, label }: { active: boolean; onClick:
 }
 
 function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
-  const active = leads.filter((lead) => !['enrolled', 'lost'].includes(lead.status))
-  const queue = useMemo(() => active.map((lead) => ({ lead, recommendation: nextContact(lead, defaultAvailability) })).sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime()), [active])
+  const active = leads.filter((lead) => lead.status === 'new' || lead.status === 'contacting')
+  const pending = leads.filter((lead) => (lead.status === 'trial_booked' && !lead.holdFormComplete) || lead.status === 'trial_complete')
+  const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'long_term_nurture')
+  const longTerm = nurture.filter((lead) => lead.status === 'long_term_nurture').length
+  const queue = useMemo(() => active.map((lead) => ({ lead, recommendation: nextContact(lead, defaultAvailability) })).sort((a, b) => {
+    const timeDifference = a.recommendation.at.getTime() - b.recommendation.at.getTime()
+    return timeDifference || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)
+  }), [leads])
   const fresh = queue.filter(({ recommendation }) => recommendation.reason.includes('now')).length
 
   return <>
     <section className="stats-grid">
-      <Stat value={String(queue.length)} label="Active follow-ups" note={`${fresh} needs a quick response`} tone="coral" />
-      <Stat value={String(leads.filter((l) => l.status === 'trial_booked').length)} label="Trials booked" note="Upcoming trial lessons" tone="gold" />
-      <Stat value={`${Math.round(leads.filter((l) => l.status === 'enrolled').length / leads.length * 100)}%`} label="Lead-to-student" note="Current sample conversion" tone="green" />
+      <Stat value={String(queue.length)} label="Active follow-ups" note={fresh ? `${fresh} needs a quick response` : 'Current call and text cadence'} tone="coral" />
+      <Stat value={String(pending.length)} label="Action pending" note="Forms, bookings, and trial closes" tone="gold" />
+      <Stat value={String(nurture.length)} label="Nurture" note={`${longTerm} in long-term nurture`} tone="green" />
     </section>
 
     <section className="card queue-card">
@@ -115,7 +127,19 @@ function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: strin
         </article>)}
       </div>
     </section>
+    <PendingActions leads={pending} onSelect={onSelect} />
   </>
+}
+
+function PendingActions({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) => void }) {
+  if (!leads.length) return null
+  return <section className="card pending-card">
+    <div className="section-head"><div><h2>Action pending</h2><p>These leads have moved beyond the outreach cadence and need a specific next step.</p></div></div>
+    <div className="pending-list">{leads.map((lead) => {
+      const action = lead.status === 'trial_complete' ? 'Follow up and close enrollment' : 'Get the trial hold form completed'
+      return <button key={lead.id} className="pending-row" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
+    })}</div>
+  </section>
 }
 
 function Stat({ value, label, note, tone }: { value: string; label: string; note: string; tone: string }) {
@@ -167,7 +191,7 @@ function Marketing({ leads }: { leads: Lead[] }) {
 }
 
 function Settings() {
-  return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>After 4:30 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
+  return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>4:30–8:00 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
 }
 
 function LeadPanel({ lead, onClose, onLog, onUpdate, onDelete }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void; onDelete: (leadId: string, activityId: string) => void }) {
@@ -180,7 +204,8 @@ function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead:
   const [phone, setPhone] = useState('')
   const [instrument, setInstrument] = useState('Piano')
   const [source, setSource] = useState('Google')
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date().toISOString(), status: 'new', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Google</option><option>Facebook</option><option>Instagram</option><option>Referral</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
+  const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date()))
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'new', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option><option>Saxophone</option><option>Trumpet</option><option>Trombone</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Google</option><option>Facebook</option><option>Instagram</option><option>Referral</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
 }
 
 export default App
