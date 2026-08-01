@@ -1,5 +1,5 @@
-export type LeadStatus = 'new' | 'contacting' | 'trial_booked' | 'trial_complete' | 'nurture' | 'long_term_nurture' | 'enrolled' | 'lost'
-export type ActivityType = 'call' | 'text' | 'email' | 'note'
+export type LeadStatus = 'active_student' | 'hot' | 'nurture' | 'nurture_long_term' | 'unresponsive'
+export type ActivityType = 'call' | 'text' | 'email' | 'note' | 'status_change'
 
 export interface Activity {
   id: string
