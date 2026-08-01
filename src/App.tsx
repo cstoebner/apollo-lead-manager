@@ -4,7 +4,7 @@ import { defaultAvailability, demoLeads } from './data'
 import { isSupabaseConfigured } from './supabase'
 import type { ActivityType, Lead, LeadStatus } from './types'
 
-type View = 'today' | 'leads' | 'trials' | 'marketing' | 'settings'
+type View = 'today' | 'leads' | 'trials' | 'activity' | 'marketing' | 'settings'
 
 const statusLabels: Record<LeadStatus, string> = {
   new: 'New', contacting: 'Contacting', trial_booked: 'Trial booked', trial_complete: 'Trial complete', enrolled: 'Enrolled', lost: 'Lost',
@@ -48,6 +48,10 @@ function Workspace() {
     status: lead.status === 'new' ? 'contacting' : lead.status,
     activities: [...lead.activities, { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), outcome: type === 'call' ? 'Attempted call' : 'Message sent' }],
   } : lead))
+  const deleteActivity = (leadId: string, activityId: string) => setLeads((current) => current.map((lead) => lead.id === leadId ? {
+    ...lead,
+    activities: lead.activities.filter((activity) => activity.id !== activityId),
+  } : lead))
 
   return (
     <div className="app-shell">
@@ -57,6 +61,7 @@ function Workspace() {
           <NavButton active={view === 'today'} onClick={() => setView('today')} icon="⌂" label="Today" />
           <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
           <NavButton active={view === 'trials'} onClick={() => setView('trials')} icon="◇" label="Trials" />
+          <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
           <NavButton active={view === 'marketing'} onClick={() => setView('marketing')} icon="↗" label="Marketing" />
           <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Availability" />
         </nav>
@@ -65,18 +70,19 @@ function Workspace() {
 
       <main className="content">
         <header className="topbar">
-          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
+          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
         {view === 'today' && <Today leads={leads} onSelect={setSelectedId} onLog={logActivity} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onUpdate={updateLead} />}
+        {view === 'activity' && <ActivityLog leads={leads} onSelect={setSelectedId} onDelete={deleteActivity} />}
         {view === 'marketing' && <Marketing leads={leads} />}
         {view === 'settings' && <Settings />}
       </main>
 
-      {selected && <LeadPanel lead={selected} onClose={() => setSelectedId(null)} onLog={logActivity} onUpdate={updateLead} />}
+      {selected && <LeadPanel lead={selected} onClose={() => setSelectedId(null)} onLog={logActivity} onUpdate={updateLead} onDelete={deleteActivity} />}
       {showNewLead && <NewLeadModal onClose={() => setShowNewLead(false)} onSave={(lead) => { setLeads((current) => [lead, ...current]); setShowNewLead(false) }} />}
     </div>
   )
@@ -127,6 +133,29 @@ function Trials({ leads, onSelect, onUpdate }: { leads: Lead[]; onSelect: (id: s
   return <section className="card"><div className="section-head"><div><h2>Trial readiness</h2><p>See what must happen before each lesson.</p></div></div><div className="trial-grid">{trials.map((lead) => <article key={lead.id} className="trial-card"><div className="trial-date"><strong>{new Date(lead.trialAt!).getDate()}</strong><span>{new Date(lead.trialAt!).toLocaleDateString('en-US', { month: 'short' })}</span></div><div className="trial-info" onClick={() => onSelect(lead.id)}><h3>{lead.name}</h3><p>{lead.instrument} · {formatDate(lead.trialAt!)}</p><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onUpdate(lead.id, { holdFormComplete: event.target.checked })} /> Hold form complete</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onUpdate(lead.id, { trialAttended: event.target.checked })} /> Attended trial</label></div></article>)}</div></section>
 }
 
+function ActivityLog({ leads, onSelect, onDelete }: { leads: Lead[]; onSelect: (id: string) => void; onDelete: (leadId: string, activityId: string) => void }) {
+  const entries = leads.flatMap((lead) => lead.activities.map((activity) => ({ lead, activity })))
+    .sort((a, b) => Date.parse(b.activity.occurredAt) - Date.parse(a.activity.occurredAt))
+
+  const remove = (leadId: string, activityId: string) => {
+    if (window.confirm('Delete this activity? This will also correct the lead’s call/text count.')) onDelete(leadId, activityId)
+  }
+
+  return <section className="card activity-card">
+    <div className="section-head"><div><h2>Communication history</h2><p>Every logged call and text, newest first.</p></div><span className="count-pill">{entries.length} actions</span></div>
+    <div className="activity-list">
+      {entries.map(({ lead, activity }) => <article className="activity-row" key={activity.id}>
+        <div className={`activity-icon ${activity.type}`}>{activity.type === 'call' ? '☎' : activity.type === 'text' ? '↗' : '•'}</div>
+        <button className="activity-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.phone}</span></button>
+        <div className="activity-detail"><strong>{activity.type === 'call' ? 'Call logged' : activity.type === 'text' ? 'Text logged' : activity.outcome}</strong><span>{activity.outcome}</span></div>
+        <time>{formatDate(activity.occurredAt)}</time>
+        <button className="delete-action" onClick={() => remove(lead.id, activity.id)} aria-label={`Delete ${activity.type} for ${lead.name}`}>Delete</button>
+      </article>)}
+      {!entries.length && <div className="empty-state"><strong>No activity yet</strong><span>Calls and texts will appear here as you log them.</span></div>}
+    </div>
+  </section>
+}
+
 function Marketing({ leads }: { leads: Lead[] }) {
   const sources = Object.values(leads.reduce<Record<string, { source: string; leads: number; spend: number; students: number }>>((result, lead) => {
     result[lead.source] ??= { source: lead.source, leads: 0, spend: 0, students: 0 }
@@ -141,9 +170,9 @@ function Settings() {
   return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>After 4:30 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
 }
 
-function LeadPanel({ lead, onClose, onLog, onUpdate }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void }) {
+function LeadPanel({ lead, onClose, onLog, onUpdate, onDelete }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void; onDelete: (leadId: string, activityId: string) => void }) {
   const recommendation = nextContact(lead, defaultAvailability)
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div><div className="drawer-actions"><button className="primary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>↗ Log text</button></div><label className="field">Pipeline stage<select value={lead.status} onChange={(event) => onUpdate(lead.id, { status: event.target.value as LeadStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{lead.activities.length}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span></div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div><div className="drawer-actions"><button className="primary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>↗ Log text</button></div><label className="field">Pipeline stage<select value={lead.status} onChange={(event) => onUpdate(lead.id, { status: event.target.value as LeadStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{lead.activities.length}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span><button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button></div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
 }
 
 function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead: Lead) => void }) {
