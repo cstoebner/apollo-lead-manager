@@ -135,6 +135,8 @@ export function nextNurtureContact(lead: Lead, availability: Availability, now =
   const anchor = latestContact ?? Date.parse(lead.receivedAt)
   let target = new Date(anchor + intervalDays * DAY)
   if (target < now) target = new Date(now)
+  if (target.getDay() === 6) target.setDate(target.getDate() + 2)
+  if (target.getDay() === 0) target.setDate(target.getDate() + 1)
 
   return {
     at: findAvailableTime(target, availability),
