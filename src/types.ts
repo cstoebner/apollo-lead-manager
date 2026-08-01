@@ -1,4 +1,4 @@
-export type LeadStatus = 'new' | 'contacting' | 'trial_booked' | 'trial_complete' | 'enrolled' | 'lost'
+export type LeadStatus = 'new' | 'contacting' | 'trial_booked' | 'trial_complete' | 'nurture' | 'long_term_nurture' | 'enrolled' | 'lost'
 export type ActivityType = 'call' | 'text' | 'email' | 'note'
 
 export interface Activity {
@@ -28,6 +28,7 @@ export interface Lead {
 
 export interface Availability {
   weekdayStart: string
+  weekdayEnd: string
   weekendStart: string
   weekendEnd: string
   tuesdayBlackout: [string, string]
