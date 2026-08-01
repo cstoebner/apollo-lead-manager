@@ -71,7 +71,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>New Hot leads now appear in Next Actions immediately.</span><span>Weekend nurture contacts now roll forward to Monday.</span><span>Logging a call or text clears that person until their next cadence date.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Future trials, one-time lessons, and student starts can be clicked and edited from their calendar previews.</span><span>New Hot leads now appear in Next Actions immediately.</span><span>Weekend nurture contacts now roll forward to Monday.</span></div>
       </section>
     </main>
   )
@@ -446,9 +446,9 @@ function upcomingEntryDate(entry: ScheduleEntry) {
   return entry.kind === 'regular' ? new Date(`${entry.startsOn}T${entry.startTime}:00`) : new Date(entry.startsAt!)
 }
 
-function UpcomingSlotNotes({ entries }: { entries: ScheduleEntry[] }) {
+function UpcomingSlotNotes({ entries, onEdit }: { entries: ScheduleEntry[]; onEdit: (entry: ScheduleEntry) => void }) {
   if (!entries.length) return null
-  return <span className="upcoming-notes">{entries.slice(0, 3).map((entry) => <small key={entry.id}>{upcomingEntryDate(entry).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })} {entry.kind === 'regular' ? 'Starts' : entry.kind === 'trial' ? 'Trial' : 'One-time'}: {entry.studentName}</small>)}{entries.length > 3 && <small>+{entries.length - 3} more</small>}</span>
+  return <div className="upcoming-notes">{entries.slice(0, 3).map((entry) => <button type="button" key={entry.id} title={`Edit ${entry.studentName}`} onClick={(event) => { event.stopPropagation(); onEdit(entry) }}><small>{upcomingEntryDate(entry).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })} {entry.kind === 'regular' ? 'Starts' : entry.kind === 'trial' ? 'Trial' : 'One-time'}: {entry.studentName}</small></button>)}{entries.length > 3 && <small>+{entries.length - 3} more</small>}</div>
 }
 
 function describeScheduleEntry(entry: ScheduleEntry) {
@@ -587,6 +587,12 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
     onScheduleLog({ action: 'Regular lesson restored', instructor: instructor.name, studentName: entry.studentName, details: `${date.toLocaleDateString('en-US')} at ${formatClock(entry.startTime!)}` })
   }
 
+  const editUpcomingEntry = (entry: ScheduleEntry) => {
+    const date = upcomingEntryDate(entry)
+    const time = entry.kind === 'regular' ? entry.startTime! : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+    setSlotEditor({ date, time, entry })
+  }
+
   return <section className="schedule-page">
     <div className="card schedule-toolbar">
       <label>Instructor<select value={instructor.id} onChange={(event) => changeInstructor(event.target.value)}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
@@ -629,9 +635,9 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
             const past = startsAt < new Date()
             const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
             return <div className={className} key={`${localDateKey(date)}-${time}`}>
-              {entry ? <button type="button" className="cell-main" onClick={() => setSlotEditor({ date, time, entry })}><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small><UpcomingSlotNotes entries={upcoming} /></button>
-                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}<UpcomingSlotNotes entries={upcoming} /></button>{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
-                  : <UpcomingSlotNotes entries={upcoming} />}
+              {entry ? <><button type="button" className="cell-main" onClick={() => setSlotEditor({ date, time, entry })}><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small></button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>
+                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
+                  : <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}
             </div>
           })])}
         </div>
