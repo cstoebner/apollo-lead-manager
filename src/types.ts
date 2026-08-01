@@ -41,3 +41,32 @@ export interface TrialOpening {
   instructor: string
   startsAt: string
 }
+
+export interface Instructor {
+  id: string
+  name: string
+  instruments: string[]
+}
+
+export interface InstructorAvailability {
+  id: string
+  instructorId: string
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+}
+
+export type ScheduleEntryKind = 'regular' | 'trial' | 'one_time'
+
+export interface ScheduleEntry {
+  id: string
+  instructorId: string
+  studentName: string
+  instrument: string
+  kind: ScheduleEntryKind
+  dayOfWeek?: number
+  startTime?: string
+  startsAt?: string
+  startsOn?: string
+  endsOn?: string
+}
