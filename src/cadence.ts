@@ -90,8 +90,11 @@ function findAvailableTime(date: Date, availability: Availability) {
 }
 
 export function nextContact(lead: Lead, availability: Availability, now = new Date()) {
-  const attempts = lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
-  if (attempts === 0) {
+  const texts = lead.activities
+    .filter((activity) => activity.type === 'text')
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+  const stage = Math.min(texts.length, OFFSETS.length - 1)
+  if (texts.length === 0) {
     const received = new Date(lead.receivedAt)
     const isFresh = now.getTime() - received.getTime() < 4 * 60 * 60 * 1000
     if (isFresh && !majorHolidays(now.getFullYear()).has(dateKey(now))) {
@@ -101,17 +104,15 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
     }
   }
 
-  const offset = OFFSETS[Math.min(attempts, OFFSETS.length - 1)] ?? 8
+  const offset = OFFSETS[stage] ?? 8
   const baseline = new Date(new Date(lead.receivedAt).getTime() + offset * DAY)
-  const recent = lead.activities
-    .filter((activity) => activity.type === 'call' || activity.type === 'text')
-    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))[0]
+  const recent = texts[0]
   if (recent && baseline <= new Date(recent.occurredAt)) baseline.setTime(Date.parse(recent.occurredAt) + 3 * DAY)
   if (baseline < now) baseline.setTime(now.getTime())
 
   return {
     at: findAvailableTime(baseline, availability),
-    reason: attempts >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${attempts + 1}`,
+    reason: texts.length >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`,
   }
 }
 
