@@ -1,17 +1,8 @@
 import type { Lead } from './types'
-
-const DAY = 86_400_000
-
-function nurtureStartedAt(lead: Lead) {
-  const statusChange = [...lead.activities].reverse().find((activity) =>
-    activity.type === 'status_change' && activity.outcome.includes('to Nurture'),
-  )
-  return statusChange ? new Date(statusChange.occurredAt) : new Date(lead.receivedAt)
-}
+import { nurtureWeekFor } from './cadence'
 
 export function nurtureMessageFor(lead: Lead, contactAt: Date, hasOpenings = false) {
-  const elapsedWeeks = Math.max(2, (contactAt.getTime() - nurtureStartedAt(lead).getTime()) / DAY / 7)
-  const week = Math.ceil(elapsedWeeks / 2) * 2
+  const week = nurtureWeekFor(lead, contactAt)
   const name = lead.name.split(' ')[0]
   const instrument = lead.instrument.toLowerCase()
 
