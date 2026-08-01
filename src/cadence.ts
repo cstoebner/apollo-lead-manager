@@ -61,18 +61,30 @@ function findAvailableTime(date: Date, availability: Availability) {
 
     const day = candidate.getDay()
     if (day === 0 || day === 6) {
-      setTime(candidate, availability.weekendStart)
-      return candidate
+      const start = setTime(new Date(candidate), availability.weekendStart)
+      const end = setTime(new Date(candidate), availability.weekendEnd)
+      if (candidate < start) return start
+      if (candidate <= end) return candidate
+      candidate.setDate(candidate.getDate() + 1)
+      setTime(candidate, '00:00')
+      continue
     }
 
-    setTime(candidate, availability.weekdayStart)
-    if (day === 2 && isInsideBlackout(candidate, availability.tuesdayBlackout)) {
-      setTime(candidate, availability.tuesdayBlackout[1])
+    const start = setTime(new Date(candidate), availability.weekdayStart)
+    const end = setTime(new Date(candidate), availability.weekdayEnd)
+    let available = candidate < start ? start : new Date(candidate)
+    if (available > end) {
+      candidate.setDate(candidate.getDate() + 1)
+      setTime(candidate, '00:00')
+      continue
     }
-    if (day === 4 && isInsideBlackout(candidate, availability.thursdayBlackout)) {
-      setTime(candidate, availability.thursdayBlackout[1])
+    if (day === 2 && isInsideBlackout(available, availability.tuesdayBlackout)) {
+      available = setTime(available, availability.tuesdayBlackout[1])
     }
-    return candidate
+    if (day === 4 && isInsideBlackout(available, availability.thursdayBlackout)) {
+      available = setTime(available, availability.thursdayBlackout[1])
+    }
+    return available
   }
   return candidate
 }
@@ -83,7 +95,9 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
     const received = new Date(lead.receivedAt)
     const isFresh = now.getTime() - received.getTime() < 4 * 60 * 60 * 1000
     if (isFresh && !majorHolidays(now.getFullYear()).has(dateKey(now))) {
-      return { at: now, reason: 'Fresh lead — contact now' }
+      const available = findAvailableTime(now, availability)
+      if (available.getTime() - now.getTime() < 60_000) return { at: now, reason: 'Fresh lead — contact now' }
+      return { at: available, reason: 'Fresh lead — next open window' }
     }
   }
 
@@ -92,7 +106,7 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
   const recent = lead.activities
     .filter((activity) => activity.type === 'call' || activity.type === 'text')
     .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))[0]
-  if (recent && baseline <= new Date(recent.occurredAt)) baseline.setDate(new Date(recent.occurredAt).getDate() + 3)
+  if (recent && baseline <= new Date(recent.occurredAt)) baseline.setTime(Date.parse(recent.occurredAt) + 3 * DAY)
   if (baseline < now) baseline.setTime(now.getTime())
 
   return {
