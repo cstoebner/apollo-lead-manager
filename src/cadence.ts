@@ -61,6 +61,7 @@ export function nurtureRequiresCall(lead: Lead, contactAt: Date) {
 
 export function nurtureCadenceState(lead: Lead): OutreachProgress {
   const startedAt = nurtureStartedAt(lead).getTime()
+  const partialCutoff = Date.now() - 36 * 60 * 60 * 1000
   const groups = new Map<string, { call: boolean; text: boolean; lastAt: number }>()
   lead.activities
     .filter((activity) => (activity.type === 'call' || activity.type === 'text') && Date.parse(activity.occurredAt) >= startedAt)
@@ -84,7 +85,7 @@ export function nurtureCadenceState(lead: Lead): OutreachProgress {
       stage += 1
       lastCompletedAt = group.lastAt
       partial = undefined
-    } else if (!lastCompletedAt || group.lastAt > lastCompletedAt) {
+    } else if (group.lastAt >= partialCutoff && (!lastCompletedAt || group.lastAt > lastCompletedAt)) {
       partial = group
     }
   }
@@ -97,18 +98,6 @@ export function nurtureCadenceState(lead: Lead): OutreachProgress {
     lastCompletedAt,
     partialAt: partial?.lastAt,
   }
-}
-
-function contactDays(lead: Lead) {
-  const latestByDay = new Map<string, number>()
-  lead.activities
-    .filter((activity) => activity.type === 'call' || activity.type === 'text')
-    .forEach((activity) => {
-      const timestamp = Date.parse(activity.occurredAt)
-      const key = dateKey(new Date(timestamp))
-      latestByDay.set(key, Math.max(latestByDay.get(key) ?? 0, timestamp))
-    })
-  return [...latestByDay.values()].sort((a, b) => b - a)
 }
 
 function nthWeekday(year: number, month: number, weekday: number, occurrence: number) {
