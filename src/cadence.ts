@@ -6,6 +6,18 @@ const OFFSETS = [0, 2, 5, 8]
 const pad = (value: number) => String(value).padStart(2, '0')
 const dateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
+function contactDays(lead: Lead) {
+  const latestByDay = new Map<string, number>()
+  lead.activities
+    .filter((activity) => activity.type === 'call' || activity.type === 'text')
+    .forEach((activity) => {
+      const timestamp = Date.parse(activity.occurredAt)
+      const key = dateKey(new Date(timestamp))
+      latestByDay.set(key, Math.max(latestByDay.get(key) ?? 0, timestamp))
+    })
+  return [...latestByDay.values()].sort((a, b) => b - a)
+}
+
 function nthWeekday(year: number, month: number, weekday: number, occurrence: number) {
   const date = new Date(year, month, 1)
   const shift = (weekday - date.getDay() + 7) % 7
@@ -90,11 +102,9 @@ function findAvailableTime(date: Date, availability: Availability) {
 }
 
 export function nextContact(lead: Lead, availability: Availability, now = new Date()) {
-  const texts = lead.activities
-    .filter((activity) => activity.type === 'text')
-    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
-  const stage = Math.min(texts.length, OFFSETS.length - 1)
-  if (texts.length === 0) {
+  const contacts = contactDays(lead)
+  const stage = Math.min(contacts.length, OFFSETS.length - 1)
+  if (contacts.length === 0) {
     const received = new Date(lead.receivedAt)
     const isFresh = now.getTime() - received.getTime() < 4 * 60 * 60 * 1000
     if (isFresh && !majorHolidays(now.getFullYear()).has(dateKey(now))) {
@@ -106,23 +116,23 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
 
   const offset = OFFSETS[stage] ?? 8
   const baseline = new Date(new Date(lead.receivedAt).getTime() + offset * DAY)
-  const recent = texts[0]
-  if (recent && baseline <= new Date(recent.occurredAt)) baseline.setTime(Date.parse(recent.occurredAt) + 3 * DAY)
+  const recent = contacts[0]
+  const previousOffset = OFFSETS[Math.max(0, stage - 1)] ?? 0
+  const interval = Math.max(1, offset - previousOffset)
+  if (recent && baseline.getTime() <= recent) baseline.setTime(recent + interval * DAY)
   if (baseline < now) baseline.setTime(now.getTime())
 
   return {
     at: findAvailableTime(baseline, availability),
-    reason: texts.length >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`,
+    reason: contacts.length >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`,
   }
 }
 
 export function nextNurtureContact(lead: Lead, availability: Availability, now = new Date()) {
-  const nurtureTexts = lead.activities
-    .filter((activity) => activity.type === 'text')
-    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
-  const latestText = nurtureTexts[0]
+  const nurtureContacts = contactDays(lead)
+  const latestContact = nurtureContacts[0]
   const intervalDays = 14
-  const anchor = latestText ? Date.parse(latestText.occurredAt) : Date.parse(lead.receivedAt)
+  const anchor = latestContact ?? Date.parse(lead.receivedAt)
   let target = new Date(anchor + intervalDays * DAY)
   if (target < now) target = new Date(now)
 
