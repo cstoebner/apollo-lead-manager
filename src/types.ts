@@ -38,5 +38,6 @@ export interface Availability {
 export interface TrialOpening {
   id: string
   instrument: string
+  instructor: string
   startsAt: string
 }
