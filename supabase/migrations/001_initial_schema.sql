@@ -2,7 +2,7 @@
 -- Every row is owned by the signed-in user. RLS prevents one account from
 -- reading or changing another account's leads.
 
-create type public.lead_status as enum ('new', 'contacting', 'trial_booked', 'trial_complete', 'enrolled', 'lost');
+create type public.lead_status as enum ('new', 'contacting', 'trial_booked', 'trial_complete', 'nurture', 'long_term_nurture', 'enrolled', 'lost');
 create type public.activity_type as enum ('call', 'text', 'email', 'note');
 
 create table public.leads (
@@ -38,6 +38,7 @@ create table public.activities (
 create table public.availability (
   owner_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
   weekday_start time not null default '16:30',
+  weekday_end time not null default '20:00',
   weekend_start time not null default '10:00',
   weekend_end time not null default '16:00',
   tuesday_blackout_start time not null default '17:00',
@@ -79,4 +80,3 @@ create policy "owners manage availability" on public.availability
 
 revoke all on table public.leads, public.activities, public.availability from anon;
 grant select, insert, update, delete on table public.leads, public.activities, public.availability to authenticated;
-
