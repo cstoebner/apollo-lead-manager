@@ -277,6 +277,7 @@ function Settings() {
 
 function TrialOpenings({ openings, onAdd, onDelete }: { openings: TrialOpening[]; onAdd: (opening: TrialOpening) => void; onDelete: (id: string) => void }) {
   const [instrument, setInstrument] = useState('Piano')
+  const [instructor, setInstructor] = useState('')
   const [startsAt, setStartsAt] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
   const upcoming = openings.filter((opening) => Date.parse(opening.startsAt) > Date.now())
     .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
@@ -284,12 +285,13 @@ function TrialOpenings({ openings, onAdd, onDelete }: { openings: TrialOpening[]
   return <section className="openings-grid">
     <form className="card opening-form" onSubmit={(event) => {
       event.preventDefault()
-      onAdd({ id: crypto.randomUUID(), instrument, startsAt: new Date(startsAt).toISOString() })
+      onAdd({ id: crypto.randomUUID(), instrument, instructor: instructor.trim(), startsAt: new Date(startsAt).toISOString() })
       setStartsAt(toDateTimeInput(new Date(Date.now() + 86_400_000)))
     }}>
       <h2>Add a trial opening</h2>
       <p>Enter real times you are comfortable offering to leads.</p>
       <label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instruments.map((item) => <option key={item}>{item}</option>)}</select></label>
+      <label className="field">Instructor<input type="text" required placeholder="Instructor name" value={instructor} onChange={(event) => setInstructor(event.target.value)} /></label>
       <label className="field">Date and time<input type="datetime-local" required min={toDateTimeInput(new Date())} value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
       <button className="primary full" type="submit">＋ Add opening</button>
     </form>
@@ -298,7 +300,7 @@ function TrialOpenings({ openings, onAdd, onDelete }: { openings: TrialOpening[]
       <div className="section-head"><div><h2>Available trial times</h2><p>Openings stay here until you delete them or book the slot.</p></div><span className="count-pill">{upcoming.length} open</span></div>
       <div className="opening-list">{upcoming.map((opening) => <article className="opening-row" key={opening.id}>
         <span className="opening-instrument">{opening.instrument.slice(0, 1)}</span>
-        <div><strong>{opening.instrument}</strong><small>{formatTrialTime(opening.startsAt)}</small></div>
+        <div><strong>{opening.instrument}</strong><small>{opening.instructor} · {formatTrialTime(opening.startsAt)}</small></div>
         <button className="delete-action" onClick={() => onDelete(opening.id)}>Delete</button>
       </article>)}{!upcoming.length && <div className="empty-state"><strong>No trial openings yet</strong><span>Add a date and time to start filling messages automatically.</span></div>}</div>
     </div>
@@ -321,7 +323,7 @@ function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft
     <p className="eyebrow">{draft.label}</p>
     <h2>Choose two {draft.lead.instrument.toLowerCase()} trial times</h2>
     <p className="muted">Select the two openings you want to offer {draft.lead.name.split(' ')[0]}.</p>
-    <div className="time-options">{matches.map((opening) => <button type="button" key={opening.id} className={selected.includes(opening.id) ? 'time-option selected' : 'time-option'} onClick={() => toggle(opening.id)}><span>{selected.includes(opening.id) ? '✓' : '○'}</span>{formatTrialTime(opening.startsAt)}</button>)}
+    <div className="time-options">{matches.map((opening) => <button type="button" key={opening.id} className={selected.includes(opening.id) ? 'time-option selected' : 'time-option'} onClick={() => toggle(opening.id)}><span>{selected.includes(opening.id) ? '✓' : '○'}</span><div><strong>{formatTrialTime(opening.startsAt)}</strong><small>Instructor: {opening.instructor}</small></div></button>)}
       {matches.length < 2 && <div className="picker-warning"><strong>Two openings are required.</strong><span>Add more {draft.lead.instrument.toLowerCase()} trial times before creating this message.</span></div>}
     </div>
     <div className="message-preview"><strong>Message preview</strong><p>{preview}</p></div>
