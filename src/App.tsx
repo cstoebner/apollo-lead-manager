@@ -71,7 +71,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Today now combines hot leads and nurture contacts into one queue.</span><span>Logging a call or text clears that person until their next cadence date.</span><span>Upcoming outreach days appear in a planning preview.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Weekend nurture contacts now roll forward to Monday.</span><span>Hot leads continue using the 0–2–5–8 cadence.</span><span>Logging a call or text clears that person until their next cadence date.</span></div>
       </section>
     </main>
   )
