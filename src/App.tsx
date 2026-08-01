@@ -72,7 +72,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Action Pending now includes booking-form, trial-completed, and enrollment controls.</span><span>Call-and-text steps remain in Next Actions until both are logged.</span><span>Text-only cadence steps now show only the text actions.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Completed text-only nurture steps now clear from Next Actions correctly.</span><span>Action Pending includes booking-form, trial-completed, and enrollment controls.</span><span>Call-and-text steps remain until both actions are logged.</span></div>
       </section>
     </main>
   )
