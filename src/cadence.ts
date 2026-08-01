@@ -105,13 +105,7 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
   const contacts = contactDays(lead)
   const stage = Math.min(contacts.length, OFFSETS.length - 1)
   if (contacts.length === 0) {
-    const received = new Date(lead.receivedAt)
-    const isFresh = now.getTime() - received.getTime() < 4 * 60 * 60 * 1000
-    if (isFresh && !majorHolidays(now.getFullYear()).has(dateKey(now))) {
-      const available = findAvailableTime(now, availability)
-      if (available.getTime() - now.getTime() < 60_000) return { at: now, reason: 'Fresh lead — contact now' }
-      return { at: available, reason: 'Fresh lead — next open window' }
-    }
+    return { at: now, reason: 'New lead — contact now' }
   }
 
   const offset = OFFSETS[stage] ?? 8
