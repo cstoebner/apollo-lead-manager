@@ -116,18 +116,18 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
 }
 
 export function nextNurtureContact(lead: Lead, availability: Availability, now = new Date()) {
-  const communications = lead.activities
-    .filter((activity) => activity.type === 'call' || activity.type === 'text')
+  const nurtureTexts = lead.activities
+    .filter((activity) => activity.type === 'text')
     .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
-  const latest = communications[0]
-  const intervalDays = lead.status === 'nurture_long_term' ? 30 : 14
-  const anchor = latest ? Date.parse(latest.occurredAt) : Date.parse(lead.receivedAt)
+  const latestText = nurtureTexts[0]
+  const intervalDays = 14
+  const anchor = latestText ? Date.parse(latestText.occurredAt) : Date.parse(lead.receivedAt)
   let target = new Date(anchor + intervalDays * DAY)
   if (target < now) target = new Date(now)
 
   return {
     at: findAvailableTime(target, availability),
-    channel: latest?.type === 'call' ? 'text' as const : 'call' as const,
-    reason: lead.status === 'nurture_long_term' ? '30-day long-term nurture' : '14-day nurture',
+    channel: 'call' as const,
+    reason: lead.status === 'nurture_long_term' ? '2-week long-term nurture' : '2-week nurture',
   }
 }
