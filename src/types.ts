@@ -69,6 +69,7 @@ export interface ScheduleEntry {
   startsAt?: string
   startsOn?: string
   endsOn?: string
+  skippedDates?: string[]
 }
 
 export interface ScheduleActivity {
