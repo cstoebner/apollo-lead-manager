@@ -9,6 +9,7 @@ const daysFromNow = (days: number, hour: number) => {
 
 export const defaultAvailability: Availability = {
   weekdayStart: '16:30',
+  weekdayEnd: '20:00',
   weekendStart: '10:00',
   weekendEnd: '16:00',
   tuesdayBlackout: ['17:00', '17:30'],
@@ -38,5 +39,17 @@ export const demoLeads: Lead[] = [
     receivedAt: hoursAgo(210), source: 'Google', campaign: 'Music Lessons Near Me', status: 'enrolled',
     activities: [{ id: 'a4', type: 'call', occurredAt: hoursAgo(208), outcome: 'Connected' }, { id: 'a5', type: 'text', occurredAt: hoursAgo(190), outcome: 'Trial reminder' }],
     trialAt: hoursAgo(72), holdFormComplete: true, trialAttended: true, enrolledAt: hoursAgo(48), adCost: 38,
+  },
+  {
+    id: '5', name: 'Ethan Rodriguez', phone: '(614) 555-0163', email: 'ethan@example.com', instrument: 'Saxophone',
+    receivedAt: hoursAgo(480), source: 'Facebook', campaign: 'Summer Music', status: 'nurture',
+    activities: [{ id: 'a6', type: 'call', occurredAt: hoursAgo(475), outcome: 'Voicemail' }, { id: 'a7', type: 'text', occurredAt: hoursAgo(430), outcome: 'Follow-up sent' }],
+    holdFormComplete: false, trialAttended: false, adCost: 22,
+  },
+  {
+    id: '6', name: 'Sophia Martin', phone: '(614) 555-0116', email: 'sophia@example.com', instrument: 'Piano',
+    receivedAt: hoursAgo(1080), source: 'Referral', campaign: 'Parent referral', status: 'long_term_nurture',
+    activities: [{ id: 'a8', type: 'call', occurredAt: hoursAgo(1076), outcome: 'Interested next semester' }],
+    holdFormComplete: false, trialAttended: false, adCost: 0,
   },
 ]
