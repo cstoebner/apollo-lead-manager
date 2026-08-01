@@ -69,7 +69,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Add notes from Today or directly inside a lead profile.</span><span>Notes now appear in the Activity Log and CSV exports.</span><span>Regular students begin on a chosen start date.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Open one recurring lesson date without removing the regular student.</span><span>Fill that absence with a trial or one-time lesson.</span><span>Restore an accidentally opened date from the calendar.</span></div>
       </section>
     </main>
   )
@@ -367,12 +367,24 @@ function entryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date,
     if (entry.kind === 'regular') {
       if (entry.dayOfWeek !== date.getDay() || entry.startTime !== time) return false
       const key = localDateKey(date)
+      if (entry.skippedDates?.includes(key)) return false
       return (!entry.startsOn || key >= entry.startsOn) && (!entry.endsOn || key <= entry.endsOn)
     }
     if (!entry.startsAt) return false
     const startsAt = new Date(entry.startsAt)
     return localDateKey(startsAt) === localDateKey(date) && `${String(startsAt.getHours()).padStart(2, '0')}:${String(startsAt.getMinutes()).padStart(2, '0')}` === time
   })
+}
+
+function skippedRegularAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  const key = localDateKey(date)
+  return entries.find((entry) => entry.instructorId === instructorId
+    && entry.kind === 'regular'
+    && entry.dayOfWeek === date.getDay()
+    && entry.startTime === time
+    && (!entry.startsOn || key >= entry.startsOn)
+    && (!entry.endsOn || key <= entry.endsOn)
+    && entry.skippedDates?.includes(key))
 }
 
 function upcomingEntriesAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
@@ -485,6 +497,18 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
     const time = next.kind === 'regular' ? next.startTime! : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     if (next.kind === 'regular' && date.getDay() !== next.dayOfWeek) { window.alert(`The start date must fall on ${scheduleDays.find((day) => day.dayOfWeek === next.dayOfWeek)?.label}.`); return }
     if (!slotIsAvailable(availability, instructor.id, date.getDay(), time)) { window.alert(`${instructor.name} is not marked available at that time.`); return }
+    if (next.kind === 'regular') {
+      const nextStart = next.startsOn ?? '0000-00-00'
+      const nextEnd = next.endsOn ?? '9999-12-31'
+      const recurringConflict = entries.some((entry) => entry.id !== next.id
+        && entry.instructorId === instructor.id
+        && entry.kind === 'regular'
+        && entry.dayOfWeek === next.dayOfWeek
+        && entry.startTime === next.startTime
+        && (entry.startsOn ?? '0000-00-00') <= nextEnd
+        && nextStart <= (entry.endsOn ?? '9999-12-31'))
+      if (recurringConflict) { window.alert('Another regular student already owns this weekly time. Open a specific absence date, then add a trial or one-time lesson there.'); return }
+    }
     if (entryAtSlot(entries.filter((entry) => entry.id !== next.id), instructor.id, date, time)) { window.alert('That time is already occupied.'); return }
     onEntriesChange(entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next])
     onOpeningsChange(openings.filter((opening) => {
@@ -510,6 +534,19 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
     onEntriesChange(entries.filter((item) => item.id !== entry.id))
     onScheduleLog({ action: 'Scheduled lesson removed', instructor: instructor.name, studentName: entry.studentName, details: describeScheduleEntry(entry) })
     setSlotEditor(null)
+  }
+
+  const skipRegularDate = (entry: ScheduleEntry, date: Date) => {
+    const key = localDateKey(date)
+    onEntriesChange(entries.map((item) => item.id === entry.id ? { ...item, skippedDates: Array.from(new Set([...(item.skippedDates ?? []), key])) } : item))
+    onScheduleLog({ action: 'Regular lesson marked absent', instructor: instructor.name, studentName: entry.studentName, details: `${date.toLocaleDateString('en-US')} at ${formatClock(entry.startTime!)}` })
+    setSlotEditor(null)
+  }
+
+  const restoreRegularDate = (entry: ScheduleEntry, date: Date) => {
+    const key = localDateKey(date)
+    onEntriesChange(entries.map((item) => item.id === entry.id ? { ...item, skippedDates: (item.skippedDates ?? []).filter((skipped) => skipped !== key) } : item))
+    onScheduleLog({ action: 'Regular lesson restored', instructor: instructor.name, studentName: entry.studentName, details: `${date.toLocaleDateString('en-US')} at ${formatClock(entry.startTime!)}` })
   }
 
   return <section className="schedule-page">
@@ -547,14 +584,15 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
           {scheduleTimes.flatMap((time) => [<div className="schedule-time" key={`time-${time}`}>{formatClock(time)}</div>, ...weekDates.map((date) => {
             const available = slotIsAvailable(availability, instructor.id, date.getDay(), time)
             const entry = entryAtSlot(entries, instructor.id, date, time)
+            const skippedRegular = entry ? undefined : skippedRegularAtSlot(entries, instructor.id, date, time)
             const startsAt = dateAtTime(date, time)
             const opening = openings.find((item) => item.instructor === instructor.name && new Date(item.startsAt).getTime() === startsAt.getTime())
             const upcoming = upcomingEntriesAtSlot(entries, instructor.id, date, time)
             const past = startsAt < new Date()
-            const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}` : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
+            const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
             return <div className={className} key={`${localDateKey(date)}-${time}`}>
               {entry ? <button type="button" className="cell-main" onClick={() => setSlotEditor({ date, time, entry })}><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small><UpcomingSlotNotes entries={upcoming} /></button>
-                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : <span>{past ? '' : 'Open'}</span>}<UpcomingSlotNotes entries={upcoming} /></button>{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}</>
+                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}<UpcomingSlotNotes entries={upcoming} /></button>{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
                   : <UpcomingSlotNotes entries={upcoming} />}
             </div>
           })])}
@@ -562,16 +600,17 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
       </div>
     </div>
     <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
-    {slotEditor && <ScheduleEntryEditor instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} />}
+    {slotEditor && <ScheduleEntryEditor instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
   </section>
 }
 
-function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete }: {
+function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete, onSkipDate }: {
   instructor: Instructor
   slot: { date: Date; time: string; entry?: ScheduleEntry }
   onClose: () => void
   onSave: (entry: ScheduleEntry) => void
   onDelete?: () => void
+  onSkipDate?: () => void
 }) {
   const existing = slot.entry
   const initialDate = existing?.startsAt ? new Date(existing.startsAt) : dateAtTime(slot.date, slot.time)
@@ -586,18 +625,18 @@ function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete }: {
   const save = () => {
     if (!studentName.trim()) return
     const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument, kind }
-    onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn } : { ...base, startsAt: new Date(startsAt).toISOString() })
+    onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn, skippedDates: existing?.skippedDates } : { ...base, startsAt: new Date(startsAt).toISOString() })
   }
 
   return <div className="overlay modal-overlay schedule-editor-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal schedule-editor">
     <button type="button" className="close" onClick={onClose}>×</button>
     <p className="eyebrow">{existing ? 'Edit scheduled lesson' : 'Add scheduled lesson'}</p>
     <h2>{existing ? existing.studentName : `${scheduleDays.find((day) => day.dayOfWeek === slot.date.getDay())?.label} at ${formatClock(slot.time)}`}</h2>
-    {existing?.kind === 'regular' && <p className="editor-caution">🔒 This is a recurring lesson. Changes only take effect after you press Save.</p>}
+    {existing?.kind === 'regular' && <p className="editor-caution">🔒 This weekly time belongs to {existing.studentName}. Use “Open this date” for a one-week absence.</p>}
     <label className="field">Student<input autoFocus required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>
-    <div className="field-pair"><label className="field">Type<select value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+    <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
     {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="1800" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
-    <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
+    <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}{onSkipDate && <button type="button" className="absence-button" onClick={onSkipDate}>Open this date</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
   </section></div>
 }
 
