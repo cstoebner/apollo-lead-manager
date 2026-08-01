@@ -1,12 +1,17 @@
 import { useMemo, useState } from 'react'
 import { activeFollowUpFor } from './activeTemplates'
 import { nextContact, nextNurtureContact } from './cadence'
-import { defaultAvailability, demoLeads } from './data'
+import { defaultAvailability, demoLeads, demoTrialOpenings } from './data'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured } from './supabase'
-import type { ActivityType, Lead, LeadStatus } from './types'
+import type { ActivityType, Lead, LeadStatus, TrialOpening } from './types'
 
-type View = 'today' | 'leads' | 'trials' | 'activity' | 'marketing' | 'settings'
+type View = 'today' | 'leads' | 'trials' | 'openings' | 'activity' | 'marketing' | 'settings'
+type MessageTemplate = { label: string; message: string; needsTimes?: boolean }
+type StartText = (lead: Lead, template?: MessageTemplate) => void
+type TextDraft = { lead: Lead; label: string; message: string }
+
+const instruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
 const statusLabels: Record<LeadStatus, string> = {
   active_student: 'Active Student', hot: 'Hot', nurture: 'Nurture',
@@ -38,6 +43,10 @@ const formatDate = (value: string | Date, includeTime = true) => new Intl.DateTi
   weekday: 'short', month: 'short', day: 'numeric', ...(includeTime ? { hour: 'numeric', minute: '2-digit' } : {}),
 }).format(new Date(value))
 
+const formatTrialTime = (value: string | Date) => new Intl.DateTimeFormat('en-US', {
+  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+}).format(new Date(value))
+
 const toDateTimeInput = (date: Date) => {
   const offset = date.getTimezoneOffset()
   return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16)
@@ -67,9 +76,19 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
 function Workspace() {
   const [view, setView] = useState<View>('today')
   const [leads, setLeads] = useState(demoLeads)
+  const [trialOpenings, setTrialOpenings] = useState(demoTrialOpenings)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
+  const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
   const selected = leads.find((lead) => lead.id === selectedId)
+
+  const startText: StartText = (lead, template) => {
+    if (template?.needsTimes) {
+      setTextDraft({ lead, label: template.label, message: template.message })
+      return
+    }
+    void openMessages(lead.phone, template?.message)
+  }
 
   const updateLead = (id: string, update: Partial<Lead>) => setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, ...update } : lead))
   const logActivity = (id: string, type: ActivityType) => setLeads((current) => current.map((lead) => lead.id === id ? {
@@ -100,6 +119,7 @@ function Workspace() {
           <NavButton active={view === 'today'} onClick={() => setView('today')} icon="⌂" label="Today" />
           <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
           <NavButton active={view === 'trials'} onClick={() => setView('trials')} icon="◇" label="Trials" />
+          <NavButton active={view === 'openings'} onClick={() => setView('openings')} icon="◫" label="Trial openings" />
           <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
           <NavButton active={view === 'marketing'} onClick={() => setView('marketing')} icon="↗" label="Marketing" />
           <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Availability" />
@@ -109,20 +129,22 @@ function Workspace() {
 
       <main className="content">
         <header className="topbar">
-          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
+          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'openings' ? 'Trial openings' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} onSelect={setSelectedId} onLog={logActivity} />}
+        {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onUpdate={updateLead} />}
+        {view === 'openings' && <TrialOpenings openings={trialOpenings} onAdd={(opening) => setTrialOpenings((current) => [...current, opening])} onDelete={(id) => setTrialOpenings((current) => current.filter((opening) => opening.id !== id))} />}
         {view === 'activity' && <ActivityLog leads={leads} onSelect={setSelectedId} onDelete={deleteActivity} />}
         {view === 'marketing' && <Marketing leads={leads} />}
         {view === 'settings' && <Settings />}
       </main>
 
-      {selected && <LeadPanel lead={selected} onClose={() => setSelectedId(null)} onLog={logActivity} onUpdate={updateLead} onStatusChange={changeStatus} onDelete={deleteActivity} />}
+      {selected && <LeadPanel lead={selected} trialOpenings={trialOpenings} onClose={() => setSelectedId(null)} onLog={logActivity} onTextNow={startText} onUpdate={updateLead} onStatusChange={changeStatus} onDelete={deleteActivity} />}
       {showNewLead && <NewLeadModal onClose={() => setShowNewLead(false)} onSave={(lead) => { setLeads((current) => [lead, ...current]); setShowNewLead(false) }} />}
+      {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
     </div>
   )
 }
@@ -131,7 +153,7 @@ function NavButton({ active, onClick, icon, label }: { active: boolean; onClick:
   return <button className={active ? 'nav-active' : ''} onClick={onClick}><span>{icon}</span>{label}</button>
 }
 
-function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
+function Today({ leads, trialOpenings, onSelect, onLog, onTextNow }: { leads: Lead[]; trialOpenings: TrialOpening[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText }) {
   const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt)
   const pending = leads.filter((lead) => lead.status === 'hot' && Boolean(lead.trialAt) && (!lead.holdFormComplete || lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now()))
   const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'nurture_long_term')
@@ -158,17 +180,17 @@ function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: strin
             <div className={`priority ${recommendation.reason.includes('now') ? 'urgent' : ''}`}>{index + 1}</div>
             <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.source}</span></div>
             <div className="recommendation"><strong>{recommendation.reason.includes('now') ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
-            <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button className="text-now" onClick={() => openMessages(lead.phone, template.message)}>↗ Text now</button></div>
+            <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></div>
           </article>
         })}
       </div>
     </section>
-    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} />
-    <NurtureCadence leads={nurture} onSelect={onSelect} onLog={onLog} />
+    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onTextNow={onTextNow} />
+    <NurtureCadence leads={nurture} trialOpenings={trialOpenings} onSelect={onSelect} onLog={onLog} onTextNow={onTextNow} />
   </>
 }
 
-function PendingActions({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
+function PendingActions({ leads, onSelect, onLog, onTextNow }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText }) {
   if (!leads.length) return null
   return <section className="card pending-card">
     <div className="section-head"><div><h2>Action pending</h2><p>These leads have moved beyond the outreach cadence and need a specific next step.</p></div></div>
@@ -176,13 +198,13 @@ function PendingActions({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (
       const action = lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now() ? 'Follow up and close enrollment' : 'Get the trial hold form completed'
       return <article key={lead.id} className="pending-row">
         <button className="pending-person" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
-        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => openMessages(lead.phone)}>↗ Text now</button></div>
+        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => onTextNow(lead)}>↗ Text now</button></div>
       </article>
     })}</div>
   </section>
 }
 
-function NurtureCadence({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
+function NurtureCadence({ leads, trialOpenings, onSelect, onLog, onTextNow }: { leads: Lead[]; trialOpenings: TrialOpening[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText }) {
   if (!leads.length) return null
   const recommendations = leads.map((lead) => ({ lead, recommendation: nextNurtureContact(lead, defaultAvailability) }))
     .sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime())
@@ -190,11 +212,12 @@ function NurtureCadence({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (
   return <section className="card nurture-card">
     <div className="section-head"><div><h2>Nurture cadence</h2><p>Text Now copies the matched personalized message and opens Messages.</p></div></div>
     <div className="nurture-list">{recommendations.map(({ lead, recommendation }) => {
-      const template = nurtureMessageFor(lead, recommendation.at)
+      const matchingOpenings = trialOpenings.filter((opening) => opening.instrument.toLowerCase() === lead.instrument.toLowerCase() && Date.parse(opening.startsAt) > Date.now())
+      const template = nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2)
       return <article className="nurture-row" key={lead.id}>
         <button className="nurture-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument}</span></button>
         <div className="nurture-next"><strong>{formatDate(recommendation.at)}</strong><span>{recommendation.reason} · {template.callFirst ? 'Call, then text' : 'Text only'}</span><em>{template.label}</em><small title={template.message}>{template.message}</small></div>
-        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button className="text-now" onClick={() => openMessages(lead.phone, template.message)}>↗ Text now</button></div>
+        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></div>
       </article>
     })}</div>
   </section>
@@ -252,14 +275,69 @@ function Settings() {
   return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>4:30–8:00 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
 }
 
-function LeadPanel({ lead, onClose, onLog, onUpdate, onStatusChange, onDelete }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDelete: (leadId: string, activityId: string) => void }) {
+function TrialOpenings({ openings, onAdd, onDelete }: { openings: TrialOpening[]; onAdd: (opening: TrialOpening) => void; onDelete: (id: string) => void }) {
+  const [instrument, setInstrument] = useState('Piano')
+  const [startsAt, setStartsAt] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
+  const upcoming = openings.filter((opening) => Date.parse(opening.startsAt) > Date.now())
+    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
+
+  return <section className="openings-grid">
+    <form className="card opening-form" onSubmit={(event) => {
+      event.preventDefault()
+      onAdd({ id: crypto.randomUUID(), instrument, startsAt: new Date(startsAt).toISOString() })
+      setStartsAt(toDateTimeInput(new Date(Date.now() + 86_400_000)))
+    }}>
+      <h2>Add a trial opening</h2>
+      <p>Enter real times you are comfortable offering to leads.</p>
+      <label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instruments.map((item) => <option key={item}>{item}</option>)}</select></label>
+      <label className="field">Date and time<input type="datetime-local" required min={toDateTimeInput(new Date())} value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
+      <button className="primary full" type="submit">＋ Add opening</button>
+    </form>
+
+    <div className="card openings-card">
+      <div className="section-head"><div><h2>Available trial times</h2><p>Openings stay here until you delete them or book the slot.</p></div><span className="count-pill">{upcoming.length} open</span></div>
+      <div className="opening-list">{upcoming.map((opening) => <article className="opening-row" key={opening.id}>
+        <span className="opening-instrument">{opening.instrument.slice(0, 1)}</span>
+        <div><strong>{opening.instrument}</strong><small>{formatTrialTime(opening.startsAt)}</small></div>
+        <button className="delete-action" onClick={() => onDelete(opening.id)}>Delete</button>
+      </article>)}{!upcoming.length && <div className="empty-state"><strong>No trial openings yet</strong><span>Add a date and time to start filling messages automatically.</span></div>}</div>
+    </div>
+  </section>
+}
+
+function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft: TextDraft; openings: TrialOpening[]; onClose: () => void; onManage: () => void; onSend: (message: string) => void }) {
+  const [selected, setSelected] = useState<string[]>([])
+  const matches = openings.filter((opening) => opening.instrument.toLowerCase() === draft.lead.instrument.toLowerCase() && Date.parse(opening.startsAt) > Date.now())
+    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
+  const chosen = selected.map((id) => matches.find((opening) => opening.id === id)).filter((opening): opening is TrialOpening => Boolean(opening))
+  const preview = draft.message
+    .replace('[Day/Time 1]', chosen[0] ? formatTrialTime(chosen[0].startsAt) : '[Choose first trial time]')
+    .replace('[Day/Time 2]', chosen[1] ? formatTrialTime(chosen[1].startsAt) : '[Choose second trial time]')
+
+  const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : current.length < 2 ? [...current, id] : current)
+
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal time-picker">
+    <button type="button" className="close" onClick={onClose}>×</button>
+    <p className="eyebrow">{draft.label}</p>
+    <h2>Choose two {draft.lead.instrument.toLowerCase()} trial times</h2>
+    <p className="muted">Select the two openings you want to offer {draft.lead.name.split(' ')[0]}.</p>
+    <div className="time-options">{matches.map((opening) => <button type="button" key={opening.id} className={selected.includes(opening.id) ? 'time-option selected' : 'time-option'} onClick={() => toggle(opening.id)}><span>{selected.includes(opening.id) ? '✓' : '○'}</span>{formatTrialTime(opening.startsAt)}</button>)}
+      {matches.length < 2 && <div className="picker-warning"><strong>Two openings are required.</strong><span>Add more {draft.lead.instrument.toLowerCase()} trial times before creating this message.</span></div>}
+    </div>
+    <div className="message-preview"><strong>Message preview</strong><p>{preview}</p></div>
+    <div className="picker-actions"><button type="button" className="secondary" onClick={onManage}>Manage openings</button><button type="button" className="primary" disabled={selected.length !== 2} onClick={() => onSend(preview)}>Copy & open Messages</button></div>
+  </section></div>
+}
+
+function LeadPanel({ lead, trialOpenings, onClose, onLog, onTextNow, onUpdate, onStatusChange, onDelete }: { lead: Lead; trialOpenings: TrialOpening[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText; onUpdate: (id: string, update: Partial<Lead>) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDelete: (leadId: string, activityId: string) => void }) {
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
   const isActiveHotLead = lead.status === 'hot' && !lead.trialAt
   const recommendation = isNurture ? nextNurtureContact(lead, defaultAvailability) : nextContact(lead, defaultAvailability)
-  const nurtureTemplate = isNurture ? nurtureMessageFor(lead, recommendation.at) : undefined
+  const matchingOpenings = trialOpenings.filter((opening) => opening.instrument.toLowerCase() === lead.instrument.toLowerCase() && Date.parse(opening.startsAt) > Date.now())
+  const nurtureTemplate = isNurture ? nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2) : undefined
   const activeTemplate = isActiveHotLead ? activeFollowUpFor(lead) : undefined
   const messageTemplate = nurtureTemplate ?? activeTemplate
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span>{messageTemplate && <><b>{messageTemplate.label}</b><small>{messageTemplate.message}</small></>}</div>{activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}<div className="drawer-actions"><button className="primary" onClick={() => openMessages(lead.phone, messageTemplate?.message)}>↗ Text now</button><button className="secondary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></div><label className="field">Status<select value={lead.status} onChange={(event) => onStatusChange(lead.id, event.target.value as LeadStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'status_change' ? 'Status updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span>{(activity.type === 'call' || activity.type === 'text') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span>{messageTemplate && <><b>{messageTemplate.label}</b><small>{messageTemplate.message}</small></>}</div>{activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}<div className="drawer-actions"><button className="primary" onClick={() => onTextNow(lead, messageTemplate)}>↗ Text now</button><button className="secondary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></div><label className="field">Status<select value={lead.status} onChange={(event) => onStatusChange(lead.id, event.target.value as LeadStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'status_change' ? 'Status updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span>{(activity.type === 'call' || activity.type === 'text') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
 }
 
 function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead: Lead) => void }) {
