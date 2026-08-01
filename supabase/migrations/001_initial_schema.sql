@@ -2,8 +2,8 @@
 -- Every row is owned by the signed-in user. RLS prevents one account from
 -- reading or changing another account's leads.
 
-create type public.lead_status as enum ('new', 'contacting', 'trial_booked', 'trial_complete', 'nurture', 'long_term_nurture', 'enrolled', 'lost');
-create type public.activity_type as enum ('call', 'text', 'email', 'note');
+create type public.lead_status as enum ('active_student', 'hot', 'nurture', 'nurture_long_term', 'unresponsive');
+create type public.activity_type as enum ('call', 'text', 'email', 'note', 'status_change');
 
 create table public.leads (
   id uuid primary key default gen_random_uuid(),
@@ -15,7 +15,7 @@ create table public.leads (
   received_at timestamptz not null default now(),
   source text not null default 'Manual entry',
   campaign text not null default '',
-  status public.lead_status not null default 'new',
+  status public.lead_status not null default 'hot',
   trial_at timestamptz,
   hold_form_complete boolean not null default false,
   trial_attended boolean not null default false,
