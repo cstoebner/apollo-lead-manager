@@ -244,10 +244,44 @@ function Trials({ leads, onSelect, onUpdate }: { leads: Lead[]; onSelect: (id: s
 }
 
 function ActivityLog({ leads, scheduleActivities, onSelect, onDelete, onDeleteSchedule }: { leads: Lead[]; scheduleActivities: ScheduleActivity[]; onSelect: (id: string) => void; onDelete: (leadId: string, activityId: string) => void; onDeleteSchedule: (id: string) => void }) {
-  const entries = [
+  const [range, setRange] = useState<'month' | 'year'>('month')
+  const [anchor, setAnchor] = useState(() => new Date())
+  const allEntries = [
     ...leads.flatMap((lead) => lead.activities.map((activity) => ({ kind: 'lead' as const, lead, activity, occurredAt: activity.occurredAt }))),
     ...scheduleActivities.map((activity) => ({ kind: 'schedule' as const, activity, occurredAt: activity.occurredAt })),
   ].sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+  const entries = allEntries.filter((entry) => {
+    const date = new Date(entry.occurredAt)
+    return date.getFullYear() === anchor.getFullYear() && (range === 'year' || date.getMonth() === anchor.getMonth())
+  })
+  const periodLabel = range === 'month'
+    ? anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : String(anchor.getFullYear())
+
+  const shiftPeriod = (direction: number) => setAnchor((current) => {
+    const next = new Date(current)
+    if (range === 'month') next.setMonth(next.getMonth() + direction)
+    else next.setFullYear(next.getFullYear() + direction)
+    return next
+  })
+
+  const exportCsv = () => {
+    const cell = (value: string) => `"${value.replace(/"/g, '""')}"`
+    const rows = entries.map((entry) => {
+      if (entry.kind === 'lead') {
+        const action = entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.outcome
+        return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Lead', entry.lead.name, '', action, entry.activity.outcome]
+      }
+      return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Schedule', entry.activity.studentName ?? '', entry.activity.instructor, entry.activity.action, entry.activity.details]
+    })
+    const csv = [['Date', 'Category', 'Person', 'Instructor', 'Action', 'Details'], ...rows].map((row) => row.map(cell).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `apollo-activity-${range === 'month' ? `${anchor.getFullYear()}-${String(anchor.getMonth() + 1).padStart(2, '0')}` : anchor.getFullYear()}.csv`
+    link.click(); URL.revokeObjectURL(url)
+  }
 
   const remove = (leadId: string, activityId: string) => {
     if (window.confirm('Delete this activity? This will also correct the lead’s call/text count.')) onDelete(leadId, activityId)
@@ -257,7 +291,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onDelete, onDeleteSc
   }
 
   return <section className="card activity-card">
-    <div className="section-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><span className="count-pill">{entries.length} actions</span></div>
+    <div className="section-head activity-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><div className="activity-controls"><div className="range-toggle"><button className={range === 'month' ? 'active' : ''} onClick={() => setRange('month')}>Month</button><button className={range === 'year' ? 'active' : ''} onClick={() => setRange('year')}>Year</button></div><div className="period-switch"><button onClick={() => shiftPeriod(-1)}>←</button><strong>{periodLabel}</strong><button onClick={() => shiftPeriod(1)}>→</button></div><button className="export-button" disabled={!entries.length} onClick={exportCsv}>⇩ Export CSV</button><span className="count-pill">{entries.length} actions</span></div></div>
     <div className="activity-list">
       {entries.map((entry) => entry.kind === 'lead' ? <article className="activity-row" key={`lead-${entry.activity.id}`}>
         <div className={`activity-icon ${entry.activity.type}`}>{entry.activity.type === 'call' ? '☎' : entry.activity.type === 'text' ? '↗' : entry.activity.type === 'status_change' ? '↻' : '•'}</div>
@@ -272,7 +306,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onDelete, onDeleteSc
         <time>{formatDate(entry.activity.occurredAt)}</time>
         <button className="delete-action" onClick={() => removeSchedule(entry.activity.id)}>Delete</button>
       </article>)}
-      {!entries.length && <div className="empty-state"><strong>No activity yet</strong><span>Calls and texts will appear here as you log them.</span></div>}
+      {!entries.length && <div className="empty-state"><strong>No activity in {periodLabel}</strong><span>Use the arrows or switch to the yearly view.</span></div>}
     </div>
   </section>
 }
