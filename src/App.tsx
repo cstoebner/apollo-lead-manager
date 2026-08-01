@@ -12,6 +12,7 @@ type StartText = (lead: Lead, template?: MessageTemplate) => void
 type TextDraft = { lead: Lead; label: string; message: string }
 type ScheduleLogInput = Omit<ScheduleActivity, 'id' | 'occurredAt'>
 type ManualActivityInput = { leadId: string; activityId?: string; type: ActivityType; occurredAt: string; outcome: string }
+type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
 
 const instruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
@@ -70,7 +71,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Long notes now stay tidy with two-line Activity previews.</span><span>Full saved notes remain easy to read in lead profiles.</span><span>Add or edit backdated events from the Activity Log.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Sort All Leads by name, date, source, touches, or status.</span><span>Long notes now stay tidy with two-line Activity previews.</span><span>Add or edit backdated events from the Activity Log.</span></div>
       </section>
     </main>
   )
@@ -247,8 +248,24 @@ function Stat({ value, label, note, tone }: { value: string; label: string; note
 }
 
 function LeadTable({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) => void }) {
+  const [sortKey, setSortKey] = useState<LeadSortKey>('receivedAt')
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const changeSort = (key: LeadSortKey) => {
+    if (sortKey === key) setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')
+    else { setSortKey(key); setSortDirection(key === 'receivedAt' || key === 'touches' ? 'desc' : 'asc') }
+  }
+  const sortedLeads = useMemo(() => [...leads].sort((a, b) => {
+    const comparison = sortKey === 'receivedAt' ? Date.parse(a.receivedAt) - Date.parse(b.receivedAt)
+      : sortKey === 'touches' ? touchCount(a) - touchCount(b)
+        : sortKey === 'status' ? statusLabels[a.status].localeCompare(statusLabels[b.status], undefined, { sensitivity: 'base' })
+          : sortKey === 'source' ? a.source.localeCompare(b.source, undefined, { sensitivity: 'base' })
+            : a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    const directed = sortDirection === 'asc' ? comparison : -comparison
+    return directed || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  }), [leads, sortKey, sortDirection])
+  const sortHeader = (key: LeadSortKey, label: string) => <th aria-sort={sortKey === key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}><button type="button" className={sortKey === key ? 'sort-button active' : 'sort-button'} onClick={() => changeSort(key)}>{label}<span>{sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
   return <section className="card"><div className="section-head"><div><h2>Lead directory</h2><p>{leads.length} total leads in this workspace</p></div><input className="search" placeholder="Search leads" /></div>
-    <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Received</th><th>Source</th><th>Touches</th><th>Status</th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.name}</strong><small>{lead.instrument}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{touchCount(lead)}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
+    <div className="table-wrap"><table><thead><tr>{sortHeader('name', 'Lead')}{sortHeader('receivedAt', 'Received')}{sortHeader('source', 'Source')}{sortHeader('touches', 'Touches')}{sortHeader('status', 'Status')}</tr></thead><tbody>{sortedLeads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.name}</strong><small>{lead.instrument}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{touchCount(lead)}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
   </section>
 }
 
