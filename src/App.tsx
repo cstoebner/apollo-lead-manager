@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { nextContact, nextNurtureContact } from './cadence'
 import { defaultAvailability, demoLeads } from './data'
+import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured } from './supabase'
 import type { ActivityType, Lead, LeadStatus } from './types'
 
@@ -13,6 +14,24 @@ const statusLabels: Record<LeadStatus, string> = {
 
 const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
 const smsLink = (phone: string) => `sms:${phone.replace(/[^+\d]/g, '')}`
+
+async function openMessages(phone: string, message?: string) {
+  if (message) {
+    try {
+      await navigator.clipboard.writeText(message)
+    } catch {
+      const textArea = document.createElement('textarea')
+      textArea.value = message
+      textArea.style.position = 'fixed'
+      textArea.style.opacity = '0'
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      textArea.remove()
+    }
+  }
+  window.location.href = smsLink(phone)
+}
 
 const formatDate = (value: string | Date, includeTime = true) => new Intl.DateTimeFormat('en-US', {
   weekday: 'short', month: 'short', day: 'numeric', ...(includeTime ? { hour: 'numeric', minute: '2-digit' } : {}),
@@ -136,22 +155,25 @@ function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: strin
           <div className={`priority ${recommendation.reason.includes('now') ? 'urgent' : ''}`}>{index + 1}</div>
           <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.source}</span></div>
           <div className="recommendation"><strong>{recommendation.reason.includes('now') ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div>
-          <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><a href={smsLink(lead.phone)}>↗ Text now</a></div>
+          <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => openMessages(lead.phone)}>↗ Text now</button></div>
         </article>)}
       </div>
     </section>
-    <PendingActions leads={pending} onSelect={onSelect} />
+    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} />
     <NurtureCadence leads={nurture} onSelect={onSelect} onLog={onLog} />
   </>
 }
 
-function PendingActions({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) => void }) {
+function PendingActions({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
   if (!leads.length) return null
   return <section className="card pending-card">
     <div className="section-head"><div><h2>Action pending</h2><p>These leads have moved beyond the outreach cadence and need a specific next step.</p></div></div>
     <div className="pending-list">{leads.map((lead) => {
       const action = lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now() ? 'Follow up and close enrollment' : 'Get the trial hold form completed'
-      return <button key={lead.id} className="pending-row" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
+      return <article key={lead.id} className="pending-row">
+        <button className="pending-person" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
+        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => openMessages(lead.phone)}>↗ Text now</button></div>
+      </article>
     })}</div>
   </section>
 }
@@ -162,12 +184,15 @@ function NurtureCadence({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (
     .sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime())
 
   return <section className="card nurture-card">
-    <div className="section-head"><div><h2>Nurture cadence</h2><p>Periodic, lower-priority outreach kept separate from active leads.</p></div></div>
-    <div className="nurture-list">{recommendations.map(({ lead, recommendation }) => <article className="nurture-row" key={lead.id}>
-      <button className="nurture-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument}</span></button>
-      <div className="nurture-next"><strong>{formatDate(recommendation.at)}</strong><span>{recommendation.reason} · {recommendation.channel === 'text' ? 'Text next' : 'Call next'}</span></div>
-      <div className="row-actions">{recommendation.channel === 'text' ? <><a href={smsLink(lead.phone)}>↗ Text now</a><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></> : <button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button>}</div>
-    </article>)}</div>
+    <div className="section-head"><div><h2>Nurture cadence</h2><p>Call first, then use the matched message. Text Now copies it and opens Messages.</p></div></div>
+    <div className="nurture-list">{recommendations.map(({ lead, recommendation }) => {
+      const template = nurtureMessageFor(lead, recommendation.at)
+      return <article className="nurture-row" key={lead.id}>
+        <button className="nurture-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument}</span></button>
+        <div className="nurture-next"><strong>{formatDate(recommendation.at)}</strong><span>{recommendation.reason} · Call, then text</span><em>{template.label}</em><small title={template.message}>{template.message}</small></div>
+        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button className="text-now" onClick={() => openMessages(lead.phone, template.message)}>↗ Text now</button></div>
+      </article>
+    })}</div>
   </section>
 }
 
@@ -224,8 +249,10 @@ function Settings() {
 }
 
 function LeadPanel({ lead, onClose, onLog, onUpdate, onStatusChange, onDelete }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDelete: (leadId: string, activityId: string) => void }) {
-  const recommendation = nextContact(lead, defaultAvailability)
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div><div className="drawer-actions"><a className="primary" href={smsLink(lead.phone)}>↗ Text now</a><button className="secondary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></div><label className="field">Status<select value={lead.status} onChange={(event) => onStatusChange(lead.id, event.target.value as LeadStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'status_change' ? 'Status updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span>{(activity.type === 'call' || activity.type === 'text') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
+  const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
+  const recommendation = isNurture ? nextNurtureContact(lead, defaultAvailability) : nextContact(lead, defaultAvailability)
+  const nurtureTemplate = isNurture ? nurtureMessageFor(lead, recommendation.at) : undefined
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span>{nurtureTemplate && <><b>{nurtureTemplate.label}</b><small>{nurtureTemplate.message}</small></>}</div><div className="drawer-actions"><button className="primary" onClick={() => openMessages(lead.phone, nurtureTemplate?.message)}>↗ Text now</button><button className="secondary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></div><label className="field">Status<select value={lead.status} onChange={(event) => onStatusChange(lead.id, event.target.value as LeadStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'status_change' ? 'Status updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span>{(activity.type === 'call' || activity.type === 'text') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
 }
 
 function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead: Lead) => void }) {
