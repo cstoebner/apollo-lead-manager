@@ -1,4 +1,4 @@
-import type { Availability, Lead, TrialOpening } from './types'
+import type { Availability, Instructor, InstructorAvailability, Lead, ScheduleEntry, TrialOpening } from './types'
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
 const daysFromNow = (days: number, hour: number) => {
@@ -16,15 +16,35 @@ export const defaultAvailability: Availability = {
   thursdayBlackout: ['16:30', '17:30'],
 }
 
-export const demoTrialOpenings: TrialOpening[] = [
-  { id: 'o1', instrument: 'Piano', instructor: 'Kristina', startsAt: daysFromNow(4, 17) },
-  { id: 'o2', instrument: 'Piano', instructor: 'Faith', startsAt: daysFromNow(6, 18) },
-  { id: 'o3', instrument: 'Guitar', instructor: 'Luke', startsAt: daysFromNow(3, 17) },
-  { id: 'o4', instrument: 'Guitar', instructor: 'Luke', startsAt: daysFromNow(8, 12) },
-  { id: 'o5', instrument: 'Voice', instructor: 'Faith', startsAt: daysFromNow(4, 16) },
-  { id: 'o6', instrument: 'Voice', instructor: 'Kristina', startsAt: daysFromNow(6, 18) },
-  { id: 'o7', instrument: 'Drums', instructor: 'Luke', startsAt: daysFromNow(3, 18) },
-  { id: 'o8', instrument: 'Drums', instructor: 'Luke', startsAt: daysFromNow(8, 13) },
+export const demoTrialOpenings: TrialOpening[] = []
+
+export const demoInstructors: Instructor[] = [
+  { id: 'luke', name: 'Luke', instruments: ['Guitar'] },
+  { id: 'faith', name: 'Faith', instruments: ['Voice', 'Piano'] },
+  { id: 'kristina', name: 'Kristina', instruments: ['Piano', 'Voice'] },
+  { id: 'race', name: 'Race', instruments: ['Saxophone'] },
+  { id: 'conor', name: 'Conor', instruments: ['Trumpet', 'Trombone'] },
+]
+
+export const demoInstructorAvailability: InstructorAvailability[] = [
+  { id: 'av1', instructorId: 'luke', dayOfWeek: 1, startTime: '16:30', endTime: '21:30' },
+  { id: 'av2', instructorId: 'luke', dayOfWeek: 6, startTime: '11:00', endTime: '15:00' },
+  { id: 'av3', instructorId: 'faith', dayOfWeek: 2, startTime: '16:30', endTime: '20:00' },
+  { id: 'av4', instructorId: 'faith', dayOfWeek: 4, startTime: '16:30', endTime: '20:00' },
+  { id: 'av5', instructorId: 'faith', dayOfWeek: 6, startTime: '10:00', endTime: '14:00' },
+  { id: 'av6', instructorId: 'kristina', dayOfWeek: 1, startTime: '15:00', endTime: '20:00' },
+  { id: 'av7', instructorId: 'kristina', dayOfWeek: 3, startTime: '15:00', endTime: '20:00' },
+  { id: 'av8', instructorId: 'race', dayOfWeek: 2, startTime: '16:00', endTime: '20:00' },
+  { id: 'av9', instructorId: 'conor', dayOfWeek: 4, startTime: '16:00', endTime: '20:00' },
+]
+
+export const demoScheduleEntries: ScheduleEntry[] = [
+  { id: 'se1', instructorId: 'luke', studentName: 'Jordan', instrument: 'Guitar', kind: 'regular', dayOfWeek: 1, startTime: '17:30' },
+  { id: 'se2', instructorId: 'luke', studentName: 'Mia', instrument: 'Guitar', kind: 'regular', dayOfWeek: 6, startTime: '11:30' },
+  { id: 'se3', instructorId: 'luke', studentName: 'Theo', instrument: 'Guitar', kind: 'regular', dayOfWeek: 6, startTime: '12:00' },
+  { id: 'se4', instructorId: 'faith', studentName: 'Sofia', instrument: 'Voice', kind: 'regular', dayOfWeek: 2, startTime: '17:30' },
+  { id: 'se5', instructorId: 'faith', studentName: 'Amelia', instrument: 'Piano', kind: 'regular', dayOfWeek: 4, startTime: '18:00' },
+  { id: 'se6', instructorId: 'kristina', studentName: 'Leo', instrument: 'Piano', kind: 'regular', dayOfWeek: 1, startTime: '16:00' },
 ]
 
 export const demoLeads: Lead[] = [
