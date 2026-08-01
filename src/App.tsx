@@ -7,9 +7,12 @@ import type { ActivityType, Lead, LeadStatus } from './types'
 type View = 'today' | 'leads' | 'trials' | 'activity' | 'marketing' | 'settings'
 
 const statusLabels: Record<LeadStatus, string> = {
-  new: 'New', contacting: 'Contacting', trial_booked: 'Trial booked', trial_complete: 'Trial complete',
-  nurture: 'Nurture', long_term_nurture: 'Long-term nurture', enrolled: 'Enrolled', lost: 'Lost',
+  active_student: 'Active Student', hot: 'Hot', nurture: 'Nurture',
+  nurture_long_term: 'Nurture Long Term', unresponsive: 'Unresponsive',
 }
+
+const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
+const smsLink = (phone: string) => `sms:${phone.replace(/[^+\d]/g, '')}`
 
 const formatDate = (value: string | Date, includeTime = true) => new Intl.DateTimeFormat('en-US', {
   weekday: 'short', month: 'short', day: 'numeric', ...(includeTime ? { hour: 'numeric', minute: '2-digit' } : {}),
@@ -51,9 +54,19 @@ function Workspace() {
   const updateLead = (id: string, update: Partial<Lead>) => setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, ...update } : lead))
   const logActivity = (id: string, type: ActivityType) => setLeads((current) => current.map((lead) => lead.id === id ? {
     ...lead,
-    status: lead.status === 'new' ? 'contacting' : lead.status,
     activities: [...lead.activities, { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), outcome: type === 'call' ? 'Attempted call' : 'Message sent' }],
   } : lead))
+  const changeStatus = (id: string, status: LeadStatus) => setLeads((current) => current.map((lead) => {
+    if (lead.id !== id || lead.status === status) return lead
+    return {
+      ...lead,
+      status,
+      activities: [...lead.activities, {
+        id: crypto.randomUUID(), type: 'status_change', occurredAt: new Date().toISOString(),
+        outcome: `Status changed from ${statusLabels[lead.status]} to ${statusLabels[status]}`,
+      }],
+    }
+  }))
   const deleteActivity = (leadId: string, activityId: string) => setLeads((current) => current.map((lead) => lead.id === leadId ? {
     ...lead,
     activities: lead.activities.filter((activity) => activity.id !== activityId),
@@ -88,7 +101,7 @@ function Workspace() {
         {view === 'settings' && <Settings />}
       </main>
 
-      {selected && <LeadPanel lead={selected} onClose={() => setSelectedId(null)} onLog={logActivity} onUpdate={updateLead} onDelete={deleteActivity} />}
+      {selected && <LeadPanel lead={selected} onClose={() => setSelectedId(null)} onLog={logActivity} onUpdate={updateLead} onStatusChange={changeStatus} onDelete={deleteActivity} />}
       {showNewLead && <NewLeadModal onClose={() => setShowNewLead(false)} onSave={(lead) => { setLeads((current) => [lead, ...current]); setShowNewLead(false) }} />}
     </div>
   )
@@ -99,10 +112,10 @@ function NavButton({ active, onClick, icon, label }: { active: boolean; onClick:
 }
 
 function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
-  const active = leads.filter((lead) => lead.status === 'new' || lead.status === 'contacting')
-  const pending = leads.filter((lead) => (lead.status === 'trial_booked' && !lead.holdFormComplete) || lead.status === 'trial_complete')
-  const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'long_term_nurture')
-  const longTerm = nurture.filter((lead) => lead.status === 'long_term_nurture').length
+  const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt)
+  const pending = leads.filter((lead) => lead.status === 'hot' && Boolean(lead.trialAt) && (!lead.holdFormComplete || lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now()))
+  const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'nurture_long_term')
+  const longTerm = nurture.filter((lead) => lead.status === 'nurture_long_term').length
   const queue = useMemo(() => active.map((lead) => ({ lead, recommendation: nextContact(lead, defaultAvailability) })).sort((a, b) => {
     const timeDifference = a.recommendation.at.getTime() - b.recommendation.at.getTime()
     return timeDifference || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)
@@ -123,7 +136,7 @@ function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: strin
           <div className={`priority ${recommendation.reason.includes('now') ? 'urgent' : ''}`}>{index + 1}</div>
           <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.source}</span></div>
           <div className="recommendation"><strong>{recommendation.reason.includes('now') ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div>
-          <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Call</button><button onClick={() => onLog(lead.id, 'text')}>↗ Text</button></div>
+          <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><a href={smsLink(lead.phone)}>↗ Text now</a></div>
         </article>)}
       </div>
     </section>
@@ -136,7 +149,7 @@ function PendingActions({ leads, onSelect }: { leads: Lead[]; onSelect: (id: str
   return <section className="card pending-card">
     <div className="section-head"><div><h2>Action pending</h2><p>These leads have moved beyond the outreach cadence and need a specific next step.</p></div></div>
     <div className="pending-list">{leads.map((lead) => {
-      const action = lead.status === 'trial_complete' ? 'Follow up and close enrollment' : 'Get the trial hold form completed'
+      const action = lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now() ? 'Follow up and close enrollment' : 'Get the trial hold form completed'
       return <button key={lead.id} className="pending-row" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
     })}</div>
   </section>
@@ -148,7 +161,7 @@ function Stat({ value, label, note, tone }: { value: string; label: string; note
 
 function LeadTable({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) => void }) {
   return <section className="card"><div className="section-head"><div><h2>Lead directory</h2><p>{leads.length} total leads in this workspace</p></div><input className="search" placeholder="Search leads" /></div>
-    <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Received</th><th>Source</th><th>Touches</th><th>Status</th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.name}</strong><small>{lead.instrument}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{lead.activities.length}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
+    <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Received</th><th>Source</th><th>Touches</th><th>Status</th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.name}</strong><small>{lead.instrument}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{touchCount(lead)}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
   </section>
 }
 
@@ -169,11 +182,11 @@ function ActivityLog({ leads, onSelect, onDelete }: { leads: Lead[]; onSelect: (
     <div className="section-head"><div><h2>Communication history</h2><p>Every logged call and text, newest first.</p></div><span className="count-pill">{entries.length} actions</span></div>
     <div className="activity-list">
       {entries.map(({ lead, activity }) => <article className="activity-row" key={activity.id}>
-        <div className={`activity-icon ${activity.type}`}>{activity.type === 'call' ? '☎' : activity.type === 'text' ? '↗' : '•'}</div>
+        <div className={`activity-icon ${activity.type}`}>{activity.type === 'call' ? '☎' : activity.type === 'text' ? '↗' : activity.type === 'status_change' ? '↻' : '•'}</div>
         <button className="activity-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.phone}</span></button>
-        <div className="activity-detail"><strong>{activity.type === 'call' ? 'Call logged' : activity.type === 'text' ? 'Text logged' : activity.outcome}</strong><span>{activity.outcome}</span></div>
+        <div className="activity-detail"><strong>{activity.type === 'call' ? 'Call logged' : activity.type === 'text' ? 'Text logged' : activity.type === 'status_change' ? 'Status updated' : activity.outcome}</strong><span>{activity.outcome}</span></div>
         <time>{formatDate(activity.occurredAt)}</time>
-        <button className="delete-action" onClick={() => remove(lead.id, activity.id)} aria-label={`Delete ${activity.type} for ${lead.name}`}>Delete</button>
+        {(activity.type === 'call' || activity.type === 'text') && <button className="delete-action" onClick={() => remove(lead.id, activity.id)} aria-label={`Delete ${activity.type} for ${lead.name}`}>Delete</button>}
       </article>)}
       {!entries.length && <div className="empty-state"><strong>No activity yet</strong><span>Calls and texts will appear here as you log them.</span></div>}
     </div>
@@ -183,20 +196,20 @@ function ActivityLog({ leads, onSelect, onDelete }: { leads: Lead[]; onSelect: (
 function Marketing({ leads }: { leads: Lead[] }) {
   const sources = Object.values(leads.reduce<Record<string, { source: string; leads: number; spend: number; students: number }>>((result, lead) => {
     result[lead.source] ??= { source: lead.source, leads: 0, spend: 0, students: 0 }
-    result[lead.source].leads += 1; result[lead.source].spend += lead.adCost; result[lead.source].students += lead.status === 'enrolled' ? 1 : 0
+    result[lead.source].leads += 1; result[lead.source].spend += lead.adCost; result[lead.source].students += lead.status === 'active_student' ? 1 : 0
     return result
   }, {}))
   const totalSpend = sources.reduce((sum, item) => sum + item.spend, 0)
-  return <><section className="stats-grid"><Stat value={`$${totalSpend}`} label="Tracked spend" note={`$${Math.round(totalSpend / leads.length)} per lead`} tone="coral" /><Stat value={String(leads.length)} label="Leads generated" note="Across all campaigns" tone="gold" /><Stat value={`$${Math.round(totalSpend / Math.max(1, leads.filter(l => l.status === 'enrolled').length))}`} label="Cost per student" note="Based on enrollments" tone="green" /></section><section className="card"><div className="section-head"><div><h2>Performance by source</h2><p>Use this to decide where the next advertising dollar goes.</p></div></div><div className="source-list">{sources.map((item) => <div className="source-row" key={item.source}><strong>{item.source}</strong><span>{item.leads} leads</span><div className="bar"><i style={{ width: `${Math.max(10, item.leads / leads.length * 100)}%` }} /></div><span>${Math.round(item.spend / item.leads)}/lead</span><span>{item.students} students</span></div>)}</div></section></>
+  return <><section className="stats-grid"><Stat value={`$${totalSpend}`} label="Tracked spend" note={`$${Math.round(totalSpend / leads.length)} per lead`} tone="coral" /><Stat value={String(leads.length)} label="Leads generated" note="Across all campaigns" tone="gold" /><Stat value={`$${Math.round(totalSpend / Math.max(1, leads.filter(l => l.status === 'active_student').length))}`} label="Cost per student" note="Based on enrollments" tone="green" /></section><section className="card"><div className="section-head"><div><h2>Performance by source</h2><p>Use this to decide where the next advertising dollar goes.</p></div></div><div className="source-list">{sources.map((item) => <div className="source-row" key={item.source}><strong>{item.source}</strong><span>{item.leads} leads</span><div className="bar"><i style={{ width: `${Math.max(10, item.leads / leads.length * 100)}%` }} /></div><span>${Math.round(item.spend / item.leads)}/lead</span><span>{item.students} students</span></div>)}</div></section></>
 }
 
 function Settings() {
   return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>4:30–8:00 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
 }
 
-function LeadPanel({ lead, onClose, onLog, onUpdate, onDelete }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void; onDelete: (leadId: string, activityId: string) => void }) {
+function LeadPanel({ lead, onClose, onLog, onUpdate, onStatusChange, onDelete }: { lead: Lead; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onUpdate: (id: string, update: Partial<Lead>) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDelete: (leadId: string, activityId: string) => void }) {
   const recommendation = nextContact(lead, defaultAvailability)
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div><div className="drawer-actions"><button className="primary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>↗ Log text</button></div><label className="field">Pipeline stage<select value={lead.status} onChange={(event) => onUpdate(lead.id, { status: event.target.value as LeadStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{lead.activities.length}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span><button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button></div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer"><button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · {lead.phone}</p><div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span></div><div className="drawer-actions"><a className="primary" href={smsLink(lead.phone)}>↗ Text now</a><button className="secondary" onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button className="secondary" onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></div><label className="field">Status<select value={lead.status} onChange={(event) => onStatusChange(lead.id, event.target.value as LeadStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Ad cost</small><strong>${lead.adCost}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div><h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'status_change' ? 'Status updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)} · {activity.outcome}</small></span>{(activity.type === 'call' || activity.type === 'text') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div></aside></div>
 }
 
 function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead: Lead) => void }) {
@@ -205,7 +218,7 @@ function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead:
   const [instrument, setInstrument] = useState('Piano')
   const [source, setSource] = useState('Google')
   const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date()))
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'new', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option><option>Saxophone</option><option>Trumpet</option><option>Trombone</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Google</option><option>Facebook</option><option>Instagram</option><option>Referral</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'hot', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option><option>Saxophone</option><option>Trumpet</option><option>Trombone</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Google</option><option>Facebook</option><option>Instagram</option><option>Referral</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
 }
 
 export default App
