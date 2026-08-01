@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 import { activeFollowUpFor } from './activeTemplates'
 import { nextContact, nextNurtureContact } from './cadence'
-import { defaultAvailability, demoLeads, demoTrialOpenings } from './data'
+import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured } from './supabase'
-import type { ActivityType, Lead, LeadStatus, TrialOpening } from './types'
+import type { ActivityType, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
 type View = 'today' | 'leads' | 'trials' | 'openings' | 'activity' | 'marketing' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean }
@@ -77,6 +77,8 @@ function Workspace() {
   const [view, setView] = useState<View>('today')
   const [leads, setLeads] = useState(demoLeads)
   const [trialOpenings, setTrialOpenings] = useState(demoTrialOpenings)
+  const [instructorAvailability, setInstructorAvailability] = useState(demoInstructorAvailability)
+  const [scheduleEntries, setScheduleEntries] = useState(demoScheduleEntries)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
@@ -119,7 +121,7 @@ function Workspace() {
           <NavButton active={view === 'today'} onClick={() => setView('today')} icon="⌂" label="Today" />
           <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
           <NavButton active={view === 'trials'} onClick={() => setView('trials')} icon="◇" label="Trials" />
-          <NavButton active={view === 'openings'} onClick={() => setView('openings')} icon="◫" label="Trial openings" />
+          <NavButton active={view === 'openings'} onClick={() => setView('openings')} icon="◫" label="Instructor schedule" />
           <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
           <NavButton active={view === 'marketing'} onClick={() => setView('marketing')} icon="↗" label="Marketing" />
           <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Availability" />
@@ -129,14 +131,14 @@ function Workspace() {
 
       <main className="content">
         <header className="topbar">
-          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'openings' ? 'Trial openings' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
+          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'openings' ? 'Instructor schedule' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
         {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onUpdate={updateLead} />}
-        {view === 'openings' && <TrialOpenings openings={trialOpenings} onAdd={(opening) => setTrialOpenings((current) => [...current, opening])} onDelete={(id) => setTrialOpenings((current) => current.filter((opening) => opening.id !== id))} />}
+        {view === 'openings' && <InstructorSchedule instructors={demoInstructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} />}
         {view === 'activity' && <ActivityLog leads={leads} onSelect={setSelectedId} onDelete={deleteActivity} />}
         {view === 'marketing' && <Marketing leads={leads} />}
         {view === 'settings' && <Settings />}
@@ -275,35 +277,178 @@ function Settings() {
   return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>4:30–8:00 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
 }
 
-function TrialOpenings({ openings, onAdd, onDelete }: { openings: TrialOpening[]; onAdd: (opening: TrialOpening) => void; onDelete: (id: string) => void }) {
-  const [instrument, setInstrument] = useState('Piano')
-  const [instructor, setInstructor] = useState('')
-  const [startsAt, setStartsAt] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
-  const upcoming = openings.filter((opening) => Date.parse(opening.startsAt) > Date.now())
-    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
+const scheduleDays = [
+  { label: 'Monday', short: 'Mon', dayOfWeek: 1 }, { label: 'Tuesday', short: 'Tue', dayOfWeek: 2 },
+  { label: 'Wednesday', short: 'Wed', dayOfWeek: 3 }, { label: 'Thursday', short: 'Thu', dayOfWeek: 4 },
+  { label: 'Friday', short: 'Fri', dayOfWeek: 5 }, { label: 'Saturday', short: 'Sat', dayOfWeek: 6 },
+]
+const scheduleTimes = Array.from({ length: 23 }, (_, index) => {
+  const minutes = 600 + index * 30
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+})
+const timeMinutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
+const startOfScheduleWeek = (value: Date) => {
+  const result = new Date(value)
+  const offset = result.getDay() === 0 ? -6 : 1 - result.getDay()
+  result.setDate(result.getDate() + offset); result.setHours(0, 0, 0, 0)
+  return result
+}
+const datePlusDays = (value: Date, days: number) => { const result = new Date(value); result.setDate(result.getDate() + days); return result }
+const dateAtTime = (date: Date, time: string) => {
+  const result = new Date(date); result.setHours(Number(time.slice(0, 2)), Number(time.slice(3, 5)), 0, 0); return result
+}
+const localDateKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+const formatClock = (time: string) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(dateAtTime(new Date(), time))
 
-  return <section className="openings-grid">
-    <form className="card opening-form" onSubmit={(event) => {
-      event.preventDefault()
-      onAdd({ id: crypto.randomUUID(), instrument, instructor: instructor.trim(), startsAt: new Date(startsAt).toISOString() })
-      setStartsAt(toDateTimeInput(new Date(Date.now() + 86_400_000)))
-    }}>
-      <h2>Add a trial opening</h2>
-      <p>Enter real times you are comfortable offering to leads.</p>
-      <label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instruments.map((item) => <option key={item}>{item}</option>)}</select></label>
-      <label className="field">Instructor<input type="text" required placeholder="Instructor name" value={instructor} onChange={(event) => setInstructor(event.target.value)} /></label>
-      <label className="field">Date and time<input type="datetime-local" required min={toDateTimeInput(new Date())} value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>
-      <button className="primary full" type="submit">＋ Add opening</button>
-    </form>
+function slotIsAvailable(availability: InstructorAvailability[], instructorId: string, dayOfWeek: number, time: string) {
+  const minute = timeMinutes(time)
+  return availability.some((block) => block.instructorId === instructorId && block.dayOfWeek === dayOfWeek && minute >= timeMinutes(block.startTime) && minute < timeMinutes(block.endTime))
+}
 
-    <div className="card openings-card">
-      <div className="section-head"><div><h2>Available trial times</h2><p>Openings stay here until you delete them or book the slot.</p></div><span className="count-pill">{upcoming.length} open</span></div>
-      <div className="opening-list">{upcoming.map((opening) => <article className="opening-row" key={opening.id}>
-        <span className="opening-instrument">{opening.instrument.slice(0, 1)}</span>
-        <div><strong>{opening.instrument}</strong><small>{opening.instructor} · {formatTrialTime(opening.startsAt)}</small></div>
-        <button className="delete-action" onClick={() => onDelete(opening.id)}>Delete</button>
-      </article>)}{!upcoming.length && <div className="empty-state"><strong>No trial openings yet</strong><span>Add a date and time to start filling messages automatically.</span></div>}</div>
+function entryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  return entries.find((entry) => {
+    if (entry.instructorId !== instructorId) return false
+    if (entry.kind === 'regular') {
+      if (entry.dayOfWeek !== date.getDay() || entry.startTime !== time) return false
+      const key = localDateKey(date)
+      return (!entry.startsOn || key >= entry.startsOn) && (!entry.endsOn || key <= entry.endsOn)
+    }
+    if (!entry.startsAt) return false
+    const startsAt = new Date(entry.startsAt)
+    return localDateKey(startsAt) === localDateKey(date) && `${String(startsAt.getHours()).padStart(2, '0')}:${String(startsAt.getMinutes()).padStart(2, '0')}` === time
+  })
+}
+
+function InstructorSchedule({ instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange }: {
+  instructors: Instructor[]
+  availability: InstructorAvailability[]
+  entries: ScheduleEntry[]
+  openings: TrialOpening[]
+  onAvailabilityChange: (value: InstructorAvailability[]) => void
+  onEntriesChange: (value: ScheduleEntry[]) => void
+  onOpeningsChange: (value: TrialOpening[]) => void
+}) {
+  const [instructorId, setInstructorId] = useState(instructors[0].id)
+  const instructor = instructors.find((item) => item.id === instructorId) ?? instructors[0]
+  const [trialInstrument, setTrialInstrument] = useState(instructor.instruments[0])
+  const [weekStart, setWeekStart] = useState(() => startOfScheduleWeek(new Date()))
+  const [availabilityDay, setAvailabilityDay] = useState(1)
+  const [availabilityStart, setAvailabilityStart] = useState('16:30')
+  const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
+  const [studentName, setStudentName] = useState('')
+  const [entryKind, setEntryKind] = useState<ScheduleEntryKind>('regular')
+  const [entryInstrument, setEntryInstrument] = useState(instructor.instruments[0])
+  const [entryDay, setEntryDay] = useState(1)
+  const [entryTime, setEntryTime] = useState('16:30')
+  const [entryDateTime, setEntryDateTime] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
+  const weekDates = scheduleDays.map((_, index) => datePlusDays(weekStart, index))
+  const instructorOpenings = openings.filter((opening) => opening.instructor === instructor.name && Date.parse(opening.startsAt) > Date.now())
+
+  const changeInstructor = (id: string) => {
+    const next = instructors.find((item) => item.id === id) ?? instructors[0]
+    setInstructorId(id); setTrialInstrument(next.instruments[0]); setEntryInstrument(next.instruments[0])
+  }
+
+  const toggleOpening = (date: Date, time: string) => {
+    const startsAt = dateAtTime(date, time)
+    const existing = openings.find((opening) => opening.instructor === instructor.name && new Date(opening.startsAt).getTime() === startsAt.getTime())
+    if (existing) onOpeningsChange(openings.filter((opening) => opening.id !== existing.id))
+    else onOpeningsChange([...openings, { id: crypto.randomUUID(), instructor: instructor.name, instrument: trialInstrument, startsAt: startsAt.toISOString() }])
+  }
+
+  const addNextOpenings = () => {
+    const candidates: Date[] = []
+    const today = new Date(); today.setSeconds(0, 0)
+    for (let dayOffset = 0; dayOffset < 42 && candidates.length < 2; dayOffset += 1) {
+      const date = datePlusDays(today, dayOffset)
+      if (!scheduleDays.some((day) => day.dayOfWeek === date.getDay())) continue
+      for (const time of scheduleTimes) {
+        const startsAt = dateAtTime(date, time)
+        if (startsAt <= new Date() || !slotIsAvailable(availability, instructor.id, date.getDay(), time)) continue
+        if (entryAtSlot(entries, instructor.id, date, time)) continue
+        if (openings.some((opening) => opening.instructor === instructor.name && new Date(opening.startsAt).getTime() === startsAt.getTime())) continue
+        candidates.push(startsAt)
+        if (candidates.length === 2) break
+      }
+    }
+    if (!candidates.length) { window.alert('No available times were found in the next six weeks.'); return }
+    onOpeningsChange([...openings, ...candidates.map((startsAt) => ({ id: crypto.randomUUID(), instructor: instructor.name, instrument: trialInstrument, startsAt: startsAt.toISOString() }))])
+    setWeekStart(startOfScheduleWeek(candidates[0]))
+  }
+
+  const addAvailability = () => {
+    if (timeMinutes(availabilityStart) >= timeMinutes(availabilityEnd)) { window.alert('The ending time must be after the starting time.'); return }
+    onAvailabilityChange([...availability, { id: crypto.randomUUID(), instructorId: instructor.id, dayOfWeek: availabilityDay, startTime: availabilityStart, endTime: availabilityEnd }])
+  }
+
+  const addEntry = () => {
+    if (!studentName.trim()) return
+    const date = entryKind === 'regular' ? datePlusDays(weekStart, entryDay - 1) : new Date(entryDateTime)
+    const time = entryKind === 'regular' ? entryTime : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+    if (!slotIsAvailable(availability, instructor.id, date.getDay(), time)) { window.alert(`${instructor.name} is not marked available at that time.`); return }
+    if (entryAtSlot(entries, instructor.id, date, time)) { window.alert('That time is already occupied.'); return }
+    const next: ScheduleEntry = entryKind === 'regular'
+      ? { id: crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument: entryInstrument, kind: entryKind, dayOfWeek: entryDay, startTime: entryTime }
+      : { id: crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument: entryInstrument, kind: entryKind, startsAt: date.toISOString() }
+    onEntriesChange([...entries, next])
+    onOpeningsChange(openings.filter((opening) => {
+      if (opening.instructor !== instructor.name) return true
+      const openingDate = new Date(opening.startsAt)
+      if (entryKind === 'regular') {
+        const openingTime = `${String(openingDate.getHours()).padStart(2, '0')}:${String(openingDate.getMinutes()).padStart(2, '0')}`
+        return openingDate.getDay() !== entryDay || openingTime !== entryTime
+      }
+      return openingDate.getTime() !== date.getTime()
+    }))
+    setStudentName('')
+  }
+
+  return <section className="schedule-page">
+    <div className="card schedule-toolbar">
+      <label>Instructor<select value={instructor.id} onChange={(event) => changeInstructor(event.target.value)}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <label>Trial instrument<select value={trialInstrument} onChange={(event) => setTrialInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label>
+      <div className="week-switcher"><button onClick={() => setWeekStart(datePlusDays(weekStart, -7))}>←</button><strong>{weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{datePlusDays(weekStart, 5).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong><button onClick={() => setWeekStart(datePlusDays(weekStart, 7))}>→</button></div>
+      <button className="primary" onClick={addNextOpenings}>＋ Add next 2 openings</button>
     </div>
+
+    <div className="schedule-legend"><span className="legend-open">Available</span><span className="legend-regular">🔒 Regular student</span><span className="legend-dated">Dated lesson</span><span className="legend-offered">Trial opening</span><small>Click an available green cell to add or remove it from Text Now.</small></div>
+
+    <div className="schedule-layout">
+      <aside className="schedule-sidebar">
+        <div className="card schedule-setup">
+          <h2>Weekly availability</h2><p>Green hours repeat every week.</p>
+          <label className="field">Day<select value={availabilityDay} onChange={(event) => setAvailabilityDay(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label>
+          <div className="field-pair"><label className="field">From<input type="time" step="1800" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label><label className="field">To<input type="time" step="1800" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label></div>
+          <button className="secondary full" onClick={addAvailability}>＋ Add available hours</button>
+          <div className="availability-chips">{availability.filter((block) => block.instructorId === instructor.id).map((block) => <span key={block.id}>{scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.short} {formatClock(block.startTime)}–{formatClock(block.endTime)}<button onClick={() => onAvailabilityChange(availability.filter((item) => item.id !== block.id))}>×</button></span>)}</div>
+        </div>
+
+        <div className="card schedule-setup">
+          <h2>Add scheduled lesson</h2><p>Regular lessons repeat; trials and one-time lessons use a date.</p>
+          <label className="field">Student<input required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>
+          <div className="field-pair"><label className="field">Type<select value={entryKind} onChange={(event) => setEntryKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select value={entryInstrument} onChange={(event) => setEntryInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+          {entryKind === 'regular' ? <div className="field-pair"><label className="field">Day<select value={entryDay} onChange={(event) => setEntryDay(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={entryTime} onChange={(event) => setEntryTime(event.target.value)} /></label></div> : <label className="field">Date and time<input type="datetime-local" step="1800" value={entryDateTime} onChange={(event) => setEntryDateTime(event.target.value)} /></label>}
+          <button className="primary full" onClick={addEntry}>＋ Add to schedule</button>
+          <div className="scheduled-list">{entries.filter((entry) => entry.instructorId === instructor.id).map((entry) => <span key={entry.id}><b>{entry.studentName}</b><small>{entry.kind === 'regular' ? `${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.short} ${formatClock(entry.startTime!)}` : formatTrialTime(entry.startsAt!)}</small><button onClick={() => onEntriesChange(entries.filter((item) => item.id !== entry.id))}>×</button></span>)}</div>
+        </div>
+      </aside>
+
+      <div className="card schedule-board">
+        <div className="schedule-grid">
+          <div className="schedule-corner">Time</div>{weekDates.map((date, index) => <div className="schedule-day" key={date.toISOString()}><strong>{scheduleDays[index].short}</strong><small>{date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}</small></div>)}
+          {scheduleTimes.flatMap((time) => [<div className="schedule-time" key={`time-${time}`}>{formatClock(time)}</div>, ...weekDates.map((date) => {
+            const available = slotIsAvailable(availability, instructor.id, date.getDay(), time)
+            const entry = entryAtSlot(entries, instructor.id, date, time)
+            const startsAt = dateAtTime(date, time)
+            const opening = openings.find((item) => item.instructor === instructor.name && new Date(item.startsAt).getTime() === startsAt.getTime())
+            const past = startsAt < new Date()
+            const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}` : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
+            return <button type="button" disabled={Boolean(entry) || !available || past} className={className} key={`${localDateKey(date)}-${time}`} onClick={() => toggleOpening(date, time)}>{entry ? <><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small></> : opening ? <><strong>✓ Trial opening</strong><small>{opening.instrument}</small></> : available ? <span>{past ? '' : 'Open'}</span> : null}</button>
+          })])}
+        </div>
+      </div>
+    </div>
+    <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
   </section>
 }
 
