@@ -1,4 +1,4 @@
-import type { Availability, Lead } from './types'
+import type { Availability, Lead, TrialOpening } from './types'
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
 const daysFromNow = (days: number, hour: number) => {
@@ -15,6 +15,17 @@ export const defaultAvailability: Availability = {
   tuesdayBlackout: ['17:00', '17:30'],
   thursdayBlackout: ['16:30', '17:30'],
 }
+
+export const demoTrialOpenings: TrialOpening[] = [
+  { id: 'o1', instrument: 'Piano', startsAt: daysFromNow(4, 17) },
+  { id: 'o2', instrument: 'Piano', startsAt: daysFromNow(6, 18) },
+  { id: 'o3', instrument: 'Guitar', startsAt: daysFromNow(3, 17) },
+  { id: 'o4', instrument: 'Guitar', startsAt: daysFromNow(8, 12) },
+  { id: 'o5', instrument: 'Voice', startsAt: daysFromNow(4, 16) },
+  { id: 'o6', instrument: 'Voice', startsAt: daysFromNow(6, 18) },
+  { id: 'o7', instrument: 'Drums', startsAt: daysFromNow(3, 18) },
+  { id: 'o8', instrument: 'Drums', startsAt: daysFromNow(8, 13) },
+]
 
 export const demoLeads: Lead[] = [
   {
