@@ -34,3 +34,9 @@ export interface Availability {
   tuesdayBlackout: [string, string]
   thursdayBlackout: [string, string]
 }
+
+export interface TrialOpening {
+  id: string
+  instrument: string
+  startsAt: string
+}
