@@ -37,7 +37,7 @@ export interface Availability {
 
 export interface TrialOpening {
   id: string
-  instrument: string
+  instruments: string[]
   instructor: string
   startsAt: string
 }
@@ -69,4 +69,13 @@ export interface ScheduleEntry {
   startsAt?: string
   startsOn?: string
   endsOn?: string
+}
+
+export interface ScheduleActivity {
+  id: string
+  occurredAt: string
+  action: string
+  instructor: string
+  details: string
+  studentName?: string
 }
