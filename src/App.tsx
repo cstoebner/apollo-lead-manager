@@ -71,7 +71,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Sort All Leads by name, date, source, touches, or status.</span><span>Long notes now stay tidy with two-line Activity previews.</span><span>Add or edit backdated events from the Activity Log.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Today now combines hot leads and nurture contacts into one queue.</span><span>Logging a call or text clears that person until their next cadence date.</span><span>Upcoming outreach days appear in a planning preview.</span></div>
       </section>
     </main>
   )
@@ -177,36 +177,56 @@ function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }:
   const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt)
   const pending = leads.filter((lead) => lead.status === 'hot' && Boolean(lead.trialAt) && (!lead.holdFormComplete || lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now()))
   const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'nurture_long_term')
-  const longTerm = nurture.filter((lead) => lead.status === 'nurture_long_term').length
-  const queue = useMemo(() => active.map((lead) => ({ lead, recommendation: nextContact(lead, defaultAvailability) })).sort((a, b) => {
-    const timeDifference = a.recommendation.at.getTime() - b.recommendation.at.getTime()
-    return timeDifference || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)
-  }), [leads])
-  const fresh = queue.filter(({ recommendation }) => recommendation.reason.includes('now')).length
+  const planned = useMemo(() => [
+    ...active.map((lead) => ({ lead, kind: 'active' as const, recommendation: nextContact(lead, defaultAvailability), template: activeFollowUpFor(lead) })),
+    ...nurture.map((lead) => {
+      const recommendation = nextNurtureContact(lead, defaultAvailability)
+      const matchingOpenings = trialOpenings.filter((opening) => opening.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()) && Date.parse(opening.startsAt) > Date.now())
+      return { lead, kind: 'nurture' as const, recommendation, template: nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2) }
+    }),
+  ].sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings])
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+  const now = new Date()
+  const queue = planned.filter(({ recommendation }) => recommendation.at <= endOfToday)
+  const upcomingMap = new Map<string, { date: Date; items: typeof planned }>()
+  planned.filter(({ recommendation }) => recommendation.at > endOfToday).forEach((item) => {
+    const key = item.recommendation.at.toDateString()
+    const group = upcomingMap.get(key) ?? { date: item.recommendation.at, items: [] }
+    group.items.push(item); upcomingMap.set(key, group)
+  })
+  const upcomingDays = [...upcomingMap.values()].sort((a, b) => a.date.getTime() - b.date.getTime()).slice(0, 5)
+  const dueNurture = queue.filter((item) => item.kind === 'nurture').length
 
   return <>
     <section className="stats-grid">
-      <Stat value={String(queue.length)} label="Active follow-ups" note={fresh ? `${fresh} needs a quick response` : 'Current call and text cadence'} tone="coral" />
+      <Stat value={String(queue.length)} label="Next actions" note={queue.length ? `${dueNurture} nurture ${dueNurture === 1 ? 'contact' : 'contacts'} included` : 'You are caught up for today'} tone="coral" />
       <Stat value={String(pending.length)} label="Action pending" note="Forms, bookings, and trial closes" tone="gold" />
-      <Stat value={String(nurture.length)} label="Nurture" note={`${longTerm} in long-term nurture`} tone="green" />
+      <Stat value={String(planned.length - queue.length)} label="Upcoming outreach" note={upcomingDays.length ? `Across the next ${upcomingDays.length} contact days` : 'Nothing else scheduled'} tone="green" />
     </section>
 
     <section className="card queue-card">
-      <div className="section-head"><div><h2>Next actions</h2><p>Ordered by urgency and your available calling times.</p></div><span className="live-pill">● Live plan</span></div>
+      <div className="section-head"><div><h2>Next actions</h2><p>Hot leads and nurture contacts, ordered by who should hear from you next.</p></div><span className="live-pill">● Today</span></div>
       <div className="queue-list">
-        {queue.map(({ lead, recommendation }, index) => {
-          const template = activeFollowUpFor(lead)
+        {queue.map(({ lead, recommendation, template, kind }, index) => {
+          const channel = kind === 'nurture' ? (template.callFirst ? 'Call, then text' : 'Text only') : 'Call or text'
           return <article className="queue-row" key={lead.id}>
-            <div className={`priority ${recommendation.reason.includes('now') ? 'urgent' : ''}`}>{index + 1}</div>
-            <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.source}</span></div>
-            <div className="recommendation"><strong>{recommendation.reason.includes('now') ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
+            <div className={`priority ${recommendation.at <= now ? 'urgent' : ''}`}>{index + 1}</div>
+            <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument} · {lead.source}</span></div>
+            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason} · {channel}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
             <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button><button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></div>
           </article>
         })}
+        {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are shown below.</span></div>}
       </div>
     </section>
     <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onTextNow={onTextNow} onTakeNote={onTakeNote} />
-    <NurtureCadence leads={nurture} trialOpenings={trialOpenings} onSelect={onSelect} onLog={onLog} onTextNow={onTextNow} onTakeNote={onTakeNote} />
+    <section className="card upcoming-outreach-card">
+      <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
+      <div className="upcoming-outreach-list">{upcomingDays.map(({ date, items }) => {
+        const earliest = items[0].recommendation.at
+        return <article key={date.toDateString()}><div className="outreach-date"><strong>{date.toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div><div className="outreach-preview"><strong>{items.length} planned {items.length === 1 ? 'contact' : 'contacts'}</strong><span>{items.slice(0, 4).map((item) => `${item.lead.name} · ${item.template.label}`).join('  •  ')}{items.length > 4 ? `  •  +${items.length - 4} more` : ''}</span></div><b>Be available around {earliest.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</b></article>
+      })}{!upcomingDays.length && <div className="today-complete"><strong>No upcoming outreach scheduled</strong><span>New leads and future cadence dates will appear here.</span></div>}</div>
+    </section>
   </>
 }
 
@@ -219,25 +239,6 @@ function PendingActions({ leads, onSelect, onLog, onTextNow, onTakeNote }: { lea
       return <article key={lead.id} className="pending-row">
         <button className="pending-person" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
         <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button><button onClick={() => onTextNow(lead)}>↗ Text now</button></div>
-      </article>
-    })}</div>
-  </section>
-}
-
-function NurtureCadence({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }: { leads: Lead[]; trialOpenings: TrialOpening[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText; onTakeNote: (id: string) => void }) {
-  if (!leads.length) return null
-  const recommendations = leads.map((lead) => ({ lead, recommendation: nextNurtureContact(lead, defaultAvailability) }))
-    .sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime())
-
-  return <section className="card nurture-card">
-    <div className="section-head"><div><h2>Nurture cadence</h2><p>Text Now copies the matched personalized message and opens Messages.</p></div></div>
-    <div className="nurture-list">{recommendations.map(({ lead, recommendation }) => {
-      const matchingOpenings = trialOpenings.filter((opening) => opening.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()) && Date.parse(opening.startsAt) > Date.now())
-      const template = nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2)
-      return <article className="nurture-row" key={lead.id}>
-        <button className="nurture-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument}</span></button>
-        <div className="nurture-next"><strong>{formatDate(recommendation.at)}</strong><span>{recommendation.reason} · {template.callFirst ? 'Call, then text' : 'Text only'}</span><em>{template.label}</em><small title={template.message}>{template.message}</small></div>
-        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button><button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></div>
       </article>
     })}</div>
   </section>
