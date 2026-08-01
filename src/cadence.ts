@@ -6,6 +6,99 @@ const OFFSETS = [0, 2, 5, 8]
 const pad = (value: number) => String(value).padStart(2, '0')
 const dateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 
+type OutreachProgress = {
+  stage: number
+  complete: boolean
+  callLogged: boolean
+  textLogged: boolean
+  lastCompletedAt?: number
+  partialAt?: number
+}
+
+const activeCallRequired = [true, false, false, false]
+
+export function activeCadenceState(lead: Lead): OutreachProgress {
+  const events = lead.activities
+    .filter((activity) => activity.type === 'call' || activity.type === 'text')
+    .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt))
+  let stage = 0
+  let callLogged = false
+  let textLogged = false
+  let lastCompletedAt: number | undefined
+
+  for (const activity of events) {
+    if (stage >= OFFSETS.length) break
+    if (activity.type === 'call') callLogged = true
+    if (activity.type === 'text') textLogged = true
+    if (textLogged && (!activeCallRequired[stage] || callLogged)) {
+      lastCompletedAt = Date.parse(activity.occurredAt)
+      stage += 1
+      callLogged = false
+      textLogged = false
+    }
+  }
+
+  const latestPartial = events.length && (callLogged || textLogged) ? Date.parse(events[events.length - 1].occurredAt) : undefined
+  return { stage, complete: stage >= OFFSETS.length, callLogged, textLogged, lastCompletedAt, partialAt: latestPartial }
+}
+
+export function nurtureStartedAt(lead: Lead) {
+  const statusChange = [...lead.activities].reverse().find((activity) =>
+    activity.type === 'status_change' && activity.outcome.includes('to Nurture'),
+  )
+  return statusChange ? new Date(statusChange.occurredAt) : new Date(lead.receivedAt)
+}
+
+export function nurtureWeekFor(lead: Lead, contactAt: Date) {
+  const elapsedWeeks = Math.max(2, (contactAt.getTime() - nurtureStartedAt(lead).getTime()) / DAY / 7)
+  return Math.ceil(elapsedWeeks / 2) * 2
+}
+
+export function nurtureRequiresCall(lead: Lead, contactAt: Date) {
+  const week = nurtureWeekFor(lead, contactAt)
+  return week <= 2 || (week > 4 && week <= 6) || (week > 8 && week <= 10)
+}
+
+export function nurtureCadenceState(lead: Lead): OutreachProgress {
+  const startedAt = nurtureStartedAt(lead).getTime()
+  const groups = new Map<string, { call: boolean; text: boolean; lastAt: number }>()
+  lead.activities
+    .filter((activity) => (activity.type === 'call' || activity.type === 'text') && Date.parse(activity.occurredAt) >= startedAt)
+    .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt))
+    .forEach((activity) => {
+      const timestamp = Date.parse(activity.occurredAt)
+      const key = dateKey(new Date(timestamp))
+      const group = groups.get(key) ?? { call: false, text: false, lastAt: timestamp }
+      if (activity.type === 'call') group.call = true
+      if (activity.type === 'text') group.text = true
+      group.lastAt = Math.max(group.lastAt, timestamp)
+      groups.set(key, group)
+    })
+
+  let stage = 0
+  let lastCompletedAt: number | undefined
+  let partial: { call: boolean; text: boolean; lastAt: number } | undefined
+  for (const group of groups.values()) {
+    const complete = group.text && (!nurtureRequiresCall(lead, new Date(group.lastAt)) || group.call)
+    if (complete) {
+      stage += 1
+      lastCompletedAt = group.lastAt
+      partial = undefined
+    } else if (!lastCompletedAt || group.lastAt > lastCompletedAt) {
+      partial = group
+    }
+  }
+
+  return {
+    stage,
+    complete: false,
+    callLogged: partial?.call ?? false,
+    textLogged: partial?.text ?? false,
+    lastCompletedAt,
+    partialAt: partial?.lastAt,
+  }
+}
+
 function contactDays(lead: Lead) {
   const latestByDay = new Map<string, number>()
   lead.activities
@@ -102,15 +195,17 @@ function findAvailableTime(date: Date, availability: Availability) {
 }
 
 export function nextContact(lead: Lead, availability: Availability, now = new Date()) {
-  const contacts = contactDays(lead)
-  const stage = Math.min(contacts.length, OFFSETS.length - 1)
-  if (contacts.length === 0) {
+  const progress = activeCadenceState(lead)
+  if (progress.complete) return { at: now, reason: 'Active cadence complete', complete: true }
+  const stage = Math.min(progress.stage, OFFSETS.length - 1)
+  if (progress.partialAt) return { at: now, reason: 'Finish this outreach step', complete: false }
+  if (stage === 0) {
     return { at: now, reason: 'New lead — contact now' }
   }
 
   const offset = OFFSETS[stage] ?? 8
   const baseline = new Date(new Date(lead.receivedAt).getTime() + offset * DAY)
-  const recent = contacts[0]
+  const recent = progress.lastCompletedAt
   const previousOffset = OFFSETS[Math.max(0, stage - 1)] ?? 0
   const interval = Math.max(1, offset - previousOffset)
   if (recent && baseline.getTime() <= recent) baseline.setTime(recent + interval * DAY)
@@ -118,15 +213,20 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
 
   return {
     at: findAvailableTime(baseline, availability),
-    reason: contacts.length >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`,
+    reason: stage >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`,
+    complete: false,
   }
 }
 
 export function nextNurtureContact(lead: Lead, availability: Availability, now = new Date()) {
-  const nurtureContacts = contactDays(lead)
-  const latestContact = nurtureContacts[0]
+  const progress = nurtureCadenceState(lead)
   const intervalDays = 14
-  const anchor = latestContact ?? Date.parse(lead.receivedAt)
+  if (progress.partialAt) return {
+    at: now,
+    channel: 'call' as const,
+    reason: 'Finish this nurture step',
+  }
+  const anchor = progress.lastCompletedAt ?? nurtureStartedAt(lead).getTime()
   let target = new Date(anchor + intervalDays * DAY)
   if (target < now) target = new Date(now)
   if (target.getDay() === 6) target.setDate(target.getDate() + 2)
