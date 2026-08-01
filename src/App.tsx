@@ -72,7 +72,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Instructor instruments can now be edited without rebuilding their schedule.</span><span>Completed text-only nurture steps now clear from Next Actions correctly.</span><span>Action Pending includes booking-form, trial-completed, and enrollment controls.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Trials are now scheduled from the instructor calendar using a searchable lead list.</span><span>Instructor instruments can now be edited without rebuilding their schedule.</span><span>Completed text-only nurture steps now clear from Next Actions correctly.</span></div>
       </section>
     </main>
   )
@@ -160,7 +160,7 @@ function Workspace() {
         {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onTrialUpdate={updateTrial} onStatusChange={changeStatus} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onTrialUpdate={updateTrial} />}
-        {view === 'openings' && <InstructorSchedule instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstructorsChange={setInstructors} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} />}
+        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstructorsChange={setInstructors} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={(id) => setScheduleActivities((current) => current.filter((activity) => activity.id !== id))} />}
         {view === 'marketing' && <Marketing leads={leads} />}
         {view === 'settings' && <Settings />}
@@ -462,7 +462,8 @@ function describeScheduleEntry(entry: ScheduleEntry) {
   return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)}`
 }
 
-function InstructorSchedule({ instructors, availability, entries, openings, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog }: {
+function InstructorSchedule({ leads, instructors, availability, entries, openings, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange }: {
+  leads: Lead[]
   instructors: Instructor[]
   availability: InstructorAvailability[]
   entries: ScheduleEntry[]
@@ -472,6 +473,7 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
   onEntriesChange: (value: ScheduleEntry[]) => void
   onOpeningsChange: (value: TrialOpening[]) => void
   onScheduleLog: (activity: ScheduleLogInput) => void
+  onLeadTrialChange: (id: string, update: Partial<Lead>, outcome: string) => void
 }) {
   const [instructorId, setInstructorId] = useState(instructors[0].id)
   const instructor = instructors.find((item) => item.id === instructorId) ?? instructors[0]
@@ -548,6 +550,8 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
 
   const saveEntry = (next: ScheduleEntry) => {
     const existing = entries.find((entry) => entry.id === next.id)
+    if (next.kind === 'trial' && !next.leadId) { window.alert('Choose a lead from the list before scheduling the trial.'); return }
+    if (next.kind === 'trial' && entries.some((entry) => entry.id !== next.id && entry.kind === 'trial' && entry.leadId === next.leadId)) { window.alert('That lead already has a trial on the instructor schedule. Edit their existing trial instead.'); return }
     const date = next.kind === 'regular' ? new Date(`${next.startsOn}T${next.startTime}:00`) : new Date(next.startsAt!)
     const time = next.kind === 'regular' ? next.startTime! : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     if (next.kind === 'regular' && date.getDay() !== next.dayOfWeek) { window.alert(`The start date must fall on ${scheduleDays.find((day) => day.dayOfWeek === next.dayOfWeek)?.label}.`); return }
@@ -581,6 +585,13 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
       studentName: next.studentName,
       details: existing ? `${describeScheduleEntry(existing)} → ${describeScheduleEntry(next)}` : describeScheduleEntry(next),
     })
+    if (existing?.kind === 'trial' && existing.leadId && (next.kind !== 'trial' || next.leadId !== existing.leadId)) {
+      onLeadTrialChange(existing.leadId, { trialAt: undefined, holdFormComplete: false, trialAttended: false }, 'Trial removed from instructor schedule')
+    }
+    if (next.kind === 'trial' && next.leadId && next.startsAt) {
+      const selectedLead = leads.find((lead) => lead.id === next.leadId)
+      onLeadTrialChange(next.leadId, { trialAt: next.startsAt }, selectedLead?.trialAt ? `Trial rescheduled to ${formatTrialTime(next.startsAt)} from the instructor schedule` : `Trial booked for ${formatTrialTime(next.startsAt)} from the instructor schedule`)
+    }
     setSlotEditor(null)
   }
 
@@ -588,6 +599,7 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
     if (!window.confirm(`Remove ${entry.studentName} from the schedule?`)) return
     onEntriesChange(entries.filter((item) => item.id !== entry.id))
     onScheduleLog({ action: 'Scheduled lesson removed', instructor: instructor.name, studentName: entry.studentName, details: describeScheduleEntry(entry) })
+    if (entry.kind === 'trial' && entry.leadId) onLeadTrialChange(entry.leadId, { trialAt: undefined, holdFormComplete: false, trialAttended: false }, 'Trial removed from instructor schedule')
     setSlotEditor(null)
   }
 
@@ -661,7 +673,7 @@ function InstructorSchedule({ instructors, availability, entries, openings, onIn
       </div>
     </div>
     <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
-    {slotEditor && <ScheduleEntryEditor instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
+    {slotEditor && <ScheduleEntryEditor leads={leads} instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
     {editingInstructor && <InstructorEditor instructor={editingInstructor} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(nextInstruments) => saveInstructorInstruments(editingInstructor, nextInstruments)} />}
   </section>
 }
@@ -680,7 +692,8 @@ function InstructorEditor({ instructor, lockedInstruments, onClose, onSave }: {
   })}</div><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!selected.length}>Save instruments</button></div></form></div>
 }
 
-function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete, onSkipDate }: {
+function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelete, onSkipDate }: {
+  leads: Lead[]
   instructor: Instructor
   slot: { date: Date; time: string; entry?: ScheduleEntry }
   onClose: () => void
@@ -690,7 +703,9 @@ function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete, onSk
 }) {
   const existing = slot.entry
   const initialDate = existing?.startsAt ? new Date(existing.startsAt) : dateAtTime(slot.date, slot.time)
-  const [studentName, setStudentName] = useState(existing?.studentName ?? '')
+  const matchedExistingLead = leads.find((lead) => lead.id === existing?.leadId) ?? (existing?.kind === 'trial' ? leads.find((lead) => lead.name.toLowerCase() === existing.studentName.toLowerCase()) : undefined)
+  const [selectedLeadId, setSelectedLeadId] = useState(matchedExistingLead?.id ?? '')
+  const [studentName, setStudentName] = useState(existing?.studentName ?? matchedExistingLead?.name ?? '')
   const [kind, setKind] = useState<ScheduleEntryKind>(existing?.kind ?? 'regular')
   const [instrument, setInstrument] = useState(existing?.instrument ?? instructor.instruments[0])
   const [dayOfWeek, setDayOfWeek] = useState(existing?.dayOfWeek ?? slot.date.getDay())
@@ -699,8 +714,9 @@ function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete, onSk
   const [startsAt, setStartsAt] = useState(() => toDateTimeInput(initialDate))
 
   const save = () => {
+    if (kind === 'trial' && !selectedLeadId) { window.alert('Choose a lead from the search list.'); return }
     if (!studentName.trim()) return
-    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument, kind }
+    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: kind === 'trial' ? selectedLeadId : undefined, studentName: studentName.trim(), instrument, kind }
     onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn, skippedDates: existing?.skippedDates } : { ...base, startsAt: new Date(startsAt).toISOString() })
   }
 
@@ -709,11 +725,22 @@ function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete, onSk
     <p className="eyebrow">{existing ? 'Edit scheduled lesson' : 'Add scheduled lesson'}</p>
     <h2>{existing ? existing.studentName : `${scheduleDays.find((day) => day.dayOfWeek === slot.date.getDay())?.label} at ${formatClock(slot.time)}`}</h2>
     {existing?.kind === 'regular' && <p className="editor-caution">🔒 This weekly time belongs to {existing.studentName}. Use “Open this date” for a one-week absence.</p>}
-    <label className="field">Student<input autoFocus required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>
-    <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+    {kind === 'trial' ? <LeadSearchPicker leads={leads} instructor={instructor} selectedLeadId={selectedLeadId} onClear={() => { setSelectedLeadId(''); setStudentName('') }} onSelect={(lead) => { setSelectedLeadId(lead.id); setStudentName(lead.name); setInstrument(lead.instrument) }} /> : <label className="field">Student<input autoFocus required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>}
+    <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => { const nextKind = event.target.value as ScheduleEntryKind; setKind(nextKind); if (nextKind === 'trial' && !selectedLeadId) setStudentName('') }}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select disabled={kind === 'trial'} value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
     {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="1800" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
     <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}{onSkipDate && <button type="button" className="absence-button" onClick={onSkipDate}>Open this date</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
   </section></div>
+}
+
+function LeadSearchPicker({ leads, instructor, selectedLeadId, onSelect, onClear }: { leads: Lead[]; instructor: Instructor; selectedLeadId: string; onSelect: (lead: Lead) => void; onClear: () => void }) {
+  const selectedLead = leads.find((lead) => lead.id === selectedLeadId)
+  const [query, setQuery] = useState(selectedLead?.name ?? '')
+  const [open, setOpen] = useState(true)
+  const matchingLeads = leads
+    .filter((lead) => instructor.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()))
+    .filter((lead) => `${lead.name} ${lead.instrument} ${statusLabels[lead.status]}`.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name))
+  return <div className="field lead-search-field"><span>Lead</span><div className="lead-search"><input autoFocus required value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); if (event.target.value !== selectedLead?.name) onClear(); setOpen(true) }} placeholder="Start typing a lead's name…" autoComplete="off" />{open && <div className="lead-search-options">{matchingLeads.map((lead) => <button type="button" className={lead.id === selectedLeadId ? 'selected' : ''} key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(lead); setQuery(lead.name); setOpen(false) }}><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></button>)}{!matchingLeads.length && <p>No leads match this instructor’s instruments and your search.</p>}</div>}</div><small>Only leads whose instrument is taught by {instructor.name} are shown.</small></div>
 }
 
 function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft: TextDraft; openings: TrialOpening[]; onClose: () => void; onManage: () => void; onSend: (message: string) => void }) {
@@ -765,17 +792,7 @@ function LeadPanel({ lead, trialOpenings, onClose, onLog, onAddNote, onTextNow, 
 }
 
 function TrialWorkflowEditor({ lead, onTrialUpdate }: { lead: Lead; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void }) {
-  const [trialAt, setTrialAt] = useState(() => lead.trialAt ? toDateTimeInput(new Date(lead.trialAt)) : '')
-  const saveTrial = () => {
-    if (!trialAt) return
-    const next = new Date(trialAt).toISOString()
-    onTrialUpdate(lead.id, { trialAt: next }, lead.trialAt ? `Trial rescheduled to ${formatTrialTime(next)}` : `Trial booked for ${formatTrialTime(next)}`)
-  }
-  const clearTrial = () => {
-    if (!window.confirm('Remove this trial booking?')) return
-    onTrialUpdate(lead.id, { trialAt: undefined, holdFormComplete: false, trialAttended: false }, 'Trial booking removed')
-  }
-  return <section className="trial-workflow"><div className="trial-workflow-head"><div><strong>Trial workflow</strong><small>{!lead.trialAt ? 'No trial booked' : lead.trialAttended ? 'Post-trial · waiting to book lessons' : lead.holdFormComplete ? 'Trial confirmed' : 'Trial booked · form pending'}</small></div></div><label className="field">Trial date and time<input type="datetime-local" value={trialAt} onChange={(event) => setTrialAt(event.target.value)} /></label><div className="trial-workflow-actions"><button type="button" className="secondary" disabled={!trialAt || trialAt === (lead.trialAt ? toDateTimeInput(new Date(lead.trialAt)) : '')} onClick={saveTrial}>{lead.trialAt ? 'Save trial time' : 'Book trial'}</button>{lead.trialAt && <button type="button" className="text-button danger" onClick={clearTrial}>Remove booking</button>}</div>{lead.trialAt && <div className="milestone-checks"><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onTrialUpdate(lead.id, { holdFormComplete: event.target.checked }, event.target.checked ? 'Booking form completed' : 'Booking form marked incomplete')} /> Booking form completed</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onTrialUpdate(lead.id, { trialAttended: event.target.checked }, event.target.checked ? 'Trial marked completed' : 'Trial marked not completed')} /> Trial completed</label></div>}</section>
+  return <section className="trial-workflow"><div className="trial-workflow-head"><div><strong>Trial workflow</strong><small>{!lead.trialAt ? 'No trial booked' : lead.trialAttended ? 'Post-trial · waiting to book lessons' : lead.holdFormComplete ? 'Trial confirmed' : 'Trial booked · form pending'}</small></div></div>{lead.trialAt ? <div className="trial-booking-summary"><strong>{formatTrialTime(lead.trialAt)}</strong><small>Manage this booking from the Instructor Schedule.</small></div> : <p className="trial-schedule-guidance">Choose this lead from an instructor’s calendar to schedule their trial.</p>}{lead.trialAt && <div className="milestone-checks"><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onTrialUpdate(lead.id, { holdFormComplete: event.target.checked }, event.target.checked ? 'Booking form completed' : 'Booking form marked incomplete')} /> Booking form completed</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onTrialUpdate(lead.id, { trialAttended: event.target.checked }, event.target.checked ? 'Trial marked completed' : 'Trial marked not completed')} /> Trial completed</label></div>}</section>
 }
 
 function LeadNoteComposer({ onSave }: { onSave: (note: string) => void }) {
