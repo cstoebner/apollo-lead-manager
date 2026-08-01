@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { nextContact } from './cadence'
+import { nextContact, nextNurtureContact } from './cadence'
 import { defaultAvailability, demoLeads } from './data'
 import { isSupabaseConfigured } from './supabase'
 import type { ActivityType, Lead, LeadStatus } from './types'
@@ -141,6 +141,7 @@ function Today({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: strin
       </div>
     </section>
     <PendingActions leads={pending} onSelect={onSelect} />
+    <NurtureCadence leads={nurture} onSelect={onSelect} onLog={onLog} />
   </>
 }
 
@@ -152,6 +153,21 @@ function PendingActions({ leads, onSelect }: { leads: Lead[]; onSelect: (id: str
       const action = lead.trialAttended || new Date(lead.trialAt!).getTime() < Date.now() ? 'Follow up and close enrollment' : 'Get the trial hold form completed'
       return <button key={lead.id} className="pending-row" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></span><b>{action}</b><i>→</i></button>
     })}</div>
+  </section>
+}
+
+function NurtureCadence({ leads, onSelect, onLog }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void }) {
+  if (!leads.length) return null
+  const recommendations = leads.map((lead) => ({ lead, recommendation: nextNurtureContact(lead, defaultAvailability) }))
+    .sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime())
+
+  return <section className="card nurture-card">
+    <div className="section-head"><div><h2>Nurture cadence</h2><p>Periodic, lower-priority outreach kept separate from active leads.</p></div></div>
+    <div className="nurture-list">{recommendations.map(({ lead, recommendation }) => <article className="nurture-row" key={lead.id}>
+      <button className="nurture-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument}</span></button>
+      <div className="nurture-next"><strong>{formatDate(recommendation.at)}</strong><span>{recommendation.reason} · {recommendation.channel === 'text' ? 'Text next' : 'Call next'}</span></div>
+      <div className="row-actions">{recommendation.channel === 'text' ? <><a href={smsLink(lead.phone)}>↗ Text now</a><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button></> : <button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button>}</div>
+    </article>)}</div>
   </section>
 }
 
