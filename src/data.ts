@@ -17,14 +17,14 @@ export const defaultAvailability: Availability = {
 }
 
 export const demoTrialOpenings: TrialOpening[] = [
-  { id: 'o1', instrument: 'Piano', startsAt: daysFromNow(4, 17) },
-  { id: 'o2', instrument: 'Piano', startsAt: daysFromNow(6, 18) },
-  { id: 'o3', instrument: 'Guitar', startsAt: daysFromNow(3, 17) },
-  { id: 'o4', instrument: 'Guitar', startsAt: daysFromNow(8, 12) },
-  { id: 'o5', instrument: 'Voice', startsAt: daysFromNow(4, 16) },
-  { id: 'o6', instrument: 'Voice', startsAt: daysFromNow(6, 18) },
-  { id: 'o7', instrument: 'Drums', startsAt: daysFromNow(3, 18) },
-  { id: 'o8', instrument: 'Drums', startsAt: daysFromNow(8, 13) },
+  { id: 'o1', instrument: 'Piano', instructor: 'Kristina', startsAt: daysFromNow(4, 17) },
+  { id: 'o2', instrument: 'Piano', instructor: 'Faith', startsAt: daysFromNow(6, 18) },
+  { id: 'o3', instrument: 'Guitar', instructor: 'Luke', startsAt: daysFromNow(3, 17) },
+  { id: 'o4', instrument: 'Guitar', instructor: 'Luke', startsAt: daysFromNow(8, 12) },
+  { id: 'o5', instrument: 'Voice', instructor: 'Faith', startsAt: daysFromNow(4, 16) },
+  { id: 'o6', instrument: 'Voice', instructor: 'Kristina', startsAt: daysFromNow(6, 18) },
+  { id: 'o7', instrument: 'Drums', instructor: 'Luke', startsAt: daysFromNow(3, 18) },
+  { id: 'o8', instrument: 'Drums', instructor: 'Luke', startsAt: daysFromNow(8, 13) },
 ]
 
 export const demoLeads: Lead[] = [
