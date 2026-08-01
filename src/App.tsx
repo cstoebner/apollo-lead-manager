@@ -4,12 +4,13 @@ import { nextContact, nextNurtureContact } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured } from './supabase'
-import type { ActivityType, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
+import type { ActivityType, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
 type View = 'today' | 'leads' | 'trials' | 'openings' | 'activity' | 'marketing' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean }
 type StartText = (lead: Lead, template?: MessageTemplate) => void
 type TextDraft = { lead: Lead; label: string; message: string }
+type ScheduleLogInput = Omit<ScheduleActivity, 'id' | 'occurredAt'>
 
 const instruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
@@ -79,6 +80,7 @@ function Workspace() {
   const [trialOpenings, setTrialOpenings] = useState(demoTrialOpenings)
   const [instructorAvailability, setInstructorAvailability] = useState(demoInstructorAvailability)
   const [scheduleEntries, setScheduleEntries] = useState(demoScheduleEntries)
+  const [scheduleActivities, setScheduleActivities] = useState<ScheduleActivity[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
@@ -112,6 +114,7 @@ function Workspace() {
     ...lead,
     activities: lead.activities.filter((activity) => activity.id !== activityId),
   } : lead))
+  const logScheduleActivity = (activity: ScheduleLogInput) => setScheduleActivities((current) => [...current, { ...activity, id: crypto.randomUUID(), occurredAt: new Date().toISOString() }])
 
   return (
     <div className="app-shell">
@@ -138,8 +141,8 @@ function Workspace() {
         {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onUpdate={updateLead} />}
-        {view === 'openings' && <InstructorSchedule instructors={demoInstructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} />}
-        {view === 'activity' && <ActivityLog leads={leads} onSelect={setSelectedId} onDelete={deleteActivity} />}
+        {view === 'openings' && <InstructorSchedule instructors={demoInstructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} />}
+        {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onDelete={deleteActivity} onDeleteSchedule={(id) => setScheduleActivities((current) => current.filter((activity) => activity.id !== id))} />}
         {view === 'marketing' && <Marketing leads={leads} />}
         {view === 'settings' && <Settings />}
       </main>
@@ -214,7 +217,7 @@ function NurtureCadence({ leads, trialOpenings, onSelect, onLog, onTextNow }: { 
   return <section className="card nurture-card">
     <div className="section-head"><div><h2>Nurture cadence</h2><p>Text Now copies the matched personalized message and opens Messages.</p></div></div>
     <div className="nurture-list">{recommendations.map(({ lead, recommendation }) => {
-      const matchingOpenings = trialOpenings.filter((opening) => opening.instrument.toLowerCase() === lead.instrument.toLowerCase() && Date.parse(opening.startsAt) > Date.now())
+      const matchingOpenings = trialOpenings.filter((opening) => opening.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()) && Date.parse(opening.startsAt) > Date.now())
       const template = nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2)
       return <article className="nurture-row" key={lead.id}>
         <button className="nurture-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {lead.instrument}</span></button>
@@ -240,23 +243,34 @@ function Trials({ leads, onSelect, onUpdate }: { leads: Lead[]; onSelect: (id: s
   return <section className="card"><div className="section-head"><div><h2>Trial readiness</h2><p>See what must happen before each lesson.</p></div></div><div className="trial-grid">{trials.map((lead) => <article key={lead.id} className="trial-card"><div className="trial-date"><strong>{new Date(lead.trialAt!).getDate()}</strong><span>{new Date(lead.trialAt!).toLocaleDateString('en-US', { month: 'short' })}</span></div><div className="trial-info" onClick={() => onSelect(lead.id)}><h3>{lead.name}</h3><p>{lead.instrument} · {formatDate(lead.trialAt!)}</p><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onUpdate(lead.id, { holdFormComplete: event.target.checked })} /> Hold form complete</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onUpdate(lead.id, { trialAttended: event.target.checked })} /> Attended trial</label></div></article>)}</div></section>
 }
 
-function ActivityLog({ leads, onSelect, onDelete }: { leads: Lead[]; onSelect: (id: string) => void; onDelete: (leadId: string, activityId: string) => void }) {
-  const entries = leads.flatMap((lead) => lead.activities.map((activity) => ({ lead, activity })))
-    .sort((a, b) => Date.parse(b.activity.occurredAt) - Date.parse(a.activity.occurredAt))
+function ActivityLog({ leads, scheduleActivities, onSelect, onDelete, onDeleteSchedule }: { leads: Lead[]; scheduleActivities: ScheduleActivity[]; onSelect: (id: string) => void; onDelete: (leadId: string, activityId: string) => void; onDeleteSchedule: (id: string) => void }) {
+  const entries = [
+    ...leads.flatMap((lead) => lead.activities.map((activity) => ({ kind: 'lead' as const, lead, activity, occurredAt: activity.occurredAt }))),
+    ...scheduleActivities.map((activity) => ({ kind: 'schedule' as const, activity, occurredAt: activity.occurredAt })),
+  ].sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
 
   const remove = (leadId: string, activityId: string) => {
     if (window.confirm('Delete this activity? This will also correct the lead’s call/text count.')) onDelete(leadId, activityId)
   }
+  const removeSchedule = (id: string) => {
+    if (window.confirm('Delete this schedule log entry? This will not undo the calendar change.')) onDeleteSchedule(id)
+  }
 
   return <section className="card activity-card">
-    <div className="section-head"><div><h2>Communication history</h2><p>Every logged call and text, newest first.</p></div><span className="count-pill">{entries.length} actions</span></div>
+    <div className="section-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><span className="count-pill">{entries.length} actions</span></div>
     <div className="activity-list">
-      {entries.map(({ lead, activity }) => <article className="activity-row" key={activity.id}>
-        <div className={`activity-icon ${activity.type}`}>{activity.type === 'call' ? '☎' : activity.type === 'text' ? '↗' : activity.type === 'status_change' ? '↻' : '•'}</div>
-        <button className="activity-person" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{lead.instrument} · {lead.phone}</span></button>
-        <div className="activity-detail"><strong>{activity.type === 'call' ? 'Call logged' : activity.type === 'text' ? 'Text logged' : activity.type === 'status_change' ? 'Status updated' : activity.outcome}</strong><span>{activity.outcome}</span></div>
-        <time>{formatDate(activity.occurredAt)}</time>
-        {(activity.type === 'call' || activity.type === 'text') && <button className="delete-action" onClick={() => remove(lead.id, activity.id)} aria-label={`Delete ${activity.type} for ${lead.name}`}>Delete</button>}
+      {entries.map((entry) => entry.kind === 'lead' ? <article className="activity-row" key={`lead-${entry.activity.id}`}>
+        <div className={`activity-icon ${entry.activity.type}`}>{entry.activity.type === 'call' ? '☎' : entry.activity.type === 'text' ? '↗' : entry.activity.type === 'status_change' ? '↻' : '•'}</div>
+        <button className="activity-person" onClick={() => onSelect(entry.lead.id)}><strong>{entry.lead.name}</strong><span>{entry.lead.instrument} · {entry.lead.phone}</span></button>
+        <div className="activity-detail"><strong>{entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.outcome}</strong><span>{entry.activity.outcome}</span></div>
+        <time>{formatDate(entry.activity.occurredAt)}</time>
+        {(entry.activity.type === 'call' || entry.activity.type === 'text') && <button className="delete-action" onClick={() => remove(entry.lead.id, entry.activity.id)} aria-label={`Delete ${entry.activity.type} for ${entry.lead.name}`}>Delete</button>}
+      </article> : <article className="activity-row" key={`schedule-${entry.activity.id}`}>
+        <div className="activity-icon schedule">◫</div>
+        <div className="activity-person static"><strong>{entry.activity.studentName ?? entry.activity.instructor}</strong><span>{entry.activity.studentName ? `${entry.activity.instructor} · Instructor schedule` : 'Instructor schedule'}</span></div>
+        <div className="activity-detail"><strong>{entry.activity.action}</strong><span>{entry.activity.details}</span></div>
+        <time>{formatDate(entry.activity.occurredAt)}</time>
+        <button className="delete-action" onClick={() => removeSchedule(entry.activity.id)}>Delete</button>
       </article>)}
       {!entries.length && <div className="empty-state"><strong>No activity yet</strong><span>Calls and texts will appear here as you log them.</span></div>}
     </div>
@@ -319,7 +333,23 @@ function entryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date,
   })
 }
 
-function InstructorSchedule({ instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange }: {
+function nextDatedEntryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  const displayedSlot = dateAtTime(date, time)
+  const cutoff = datePlusDays(displayedSlot, 42)
+  return entries.filter((entry) => {
+    if (entry.instructorId !== instructorId || entry.kind === 'regular' || !entry.startsAt) return false
+    const startsAt = new Date(entry.startsAt)
+    const entryTime = `${String(startsAt.getHours()).padStart(2, '0')}:${String(startsAt.getMinutes()).padStart(2, '0')}`
+    return startsAt > displayedSlot && startsAt <= cutoff && startsAt.getDay() === date.getDay() && entryTime === time
+  }).sort((a, b) => Date.parse(a.startsAt!) - Date.parse(b.startsAt!))[0]
+}
+
+function describeScheduleEntry(entry: ScheduleEntry) {
+  if (entry.kind === 'regular') return `${entry.instrument} · Every ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)}`
+  return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)}`
+}
+
+function InstructorSchedule({ instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog }: {
   instructors: Instructor[]
   availability: InstructorAvailability[]
   entries: ScheduleEntry[]
@@ -327,88 +357,82 @@ function InstructorSchedule({ instructors, availability, entries, openings, onAv
   onAvailabilityChange: (value: InstructorAvailability[]) => void
   onEntriesChange: (value: ScheduleEntry[]) => void
   onOpeningsChange: (value: TrialOpening[]) => void
+  onScheduleLog: (activity: ScheduleLogInput) => void
 }) {
   const [instructorId, setInstructorId] = useState(instructors[0].id)
   const instructor = instructors.find((item) => item.id === instructorId) ?? instructors[0]
-  const [trialInstrument, setTrialInstrument] = useState(instructor.instruments[0])
   const [weekStart, setWeekStart] = useState(() => startOfScheduleWeek(new Date()))
   const [availabilityDay, setAvailabilityDay] = useState(1)
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
   const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
-  const [studentName, setStudentName] = useState('')
-  const [entryKind, setEntryKind] = useState<ScheduleEntryKind>('regular')
-  const [entryInstrument, setEntryInstrument] = useState(instructor.instruments[0])
-  const [entryDay, setEntryDay] = useState(1)
-  const [entryTime, setEntryTime] = useState('16:30')
-  const [entryDateTime, setEntryDateTime] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
+  const [slotEditor, setSlotEditor] = useState<{ date: Date; time: string; entry?: ScheduleEntry } | null>(null)
   const weekDates = scheduleDays.map((_, index) => datePlusDays(weekStart, index))
   const instructorOpenings = openings.filter((opening) => opening.instructor === instructor.name && Date.parse(opening.startsAt) > Date.now())
 
   const changeInstructor = (id: string) => {
     const next = instructors.find((item) => item.id === id) ?? instructors[0]
-    setInstructorId(id); setTrialInstrument(next.instruments[0]); setEntryInstrument(next.instruments[0])
+    setInstructorId(id); setSlotEditor(null)
   }
 
   const toggleOpening = (date: Date, time: string) => {
     const startsAt = dateAtTime(date, time)
     const existing = openings.find((opening) => opening.instructor === instructor.name && new Date(opening.startsAt).getTime() === startsAt.getTime())
-    if (existing) onOpeningsChange(openings.filter((opening) => opening.id !== existing.id))
-    else onOpeningsChange([...openings, { id: crypto.randomUUID(), instructor: instructor.name, instrument: trialInstrument, startsAt: startsAt.toISOString() }])
-  }
-
-  const addNextOpenings = () => {
-    const candidates: Date[] = []
-    const today = new Date(); today.setSeconds(0, 0)
-    for (let dayOffset = 0; dayOffset < 42 && candidates.length < 2; dayOffset += 1) {
-      const date = datePlusDays(today, dayOffset)
-      if (!scheduleDays.some((day) => day.dayOfWeek === date.getDay())) continue
-      for (const time of scheduleTimes) {
-        const startsAt = dateAtTime(date, time)
-        if (startsAt <= new Date() || !slotIsAvailable(availability, instructor.id, date.getDay(), time)) continue
-        if (entryAtSlot(entries, instructor.id, date, time)) continue
-        if (openings.some((opening) => opening.instructor === instructor.name && new Date(opening.startsAt).getTime() === startsAt.getTime())) continue
-        candidates.push(startsAt)
-        if (candidates.length === 2) break
-      }
+    if (existing) {
+      onOpeningsChange(openings.filter((opening) => opening.id !== existing.id))
+      onScheduleLog({ action: 'Trial opening removed', instructor: instructor.name, details: `${formatTrialTime(startsAt)} · ${instructor.instruments.join(' / ')}` })
+    } else {
+      onOpeningsChange([...openings, { id: crypto.randomUUID(), instructor: instructor.name, instruments: instructor.instruments, startsAt: startsAt.toISOString() }])
+      onScheduleLog({ action: 'Trial opening added', instructor: instructor.name, details: `${formatTrialTime(startsAt)} · ${instructor.instruments.join(' / ')}` })
     }
-    if (!candidates.length) { window.alert('No available times were found in the next six weeks.'); return }
-    onOpeningsChange([...openings, ...candidates.map((startsAt) => ({ id: crypto.randomUUID(), instructor: instructor.name, instrument: trialInstrument, startsAt: startsAt.toISOString() }))])
-    setWeekStart(startOfScheduleWeek(candidates[0]))
   }
 
   const addAvailability = () => {
     if (timeMinutes(availabilityStart) >= timeMinutes(availabilityEnd)) { window.alert('The ending time must be after the starting time.'); return }
     onAvailabilityChange([...availability, { id: crypto.randomUUID(), instructorId: instructor.id, dayOfWeek: availabilityDay, startTime: availabilityStart, endTime: availabilityEnd }])
+    onScheduleLog({ action: 'Availability added', instructor: instructor.name, details: `${scheduleDays.find((day) => day.dayOfWeek === availabilityDay)?.label} · ${formatClock(availabilityStart)}–${formatClock(availabilityEnd)}` })
   }
 
-  const addEntry = () => {
-    if (!studentName.trim()) return
-    const date = entryKind === 'regular' ? datePlusDays(weekStart, entryDay - 1) : new Date(entryDateTime)
-    const time = entryKind === 'regular' ? entryTime : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  const removeAvailability = (block: InstructorAvailability) => {
+    onAvailabilityChange(availability.filter((item) => item.id !== block.id))
+    onScheduleLog({ action: 'Availability removed', instructor: instructor.name, details: `${scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.label} · ${formatClock(block.startTime)}–${formatClock(block.endTime)}` })
+  }
+
+  const saveEntry = (next: ScheduleEntry) => {
+    const existing = entries.find((entry) => entry.id === next.id)
+    const date = next.kind === 'regular' ? datePlusDays(weekStart, next.dayOfWeek! - 1) : new Date(next.startsAt!)
+    const time = next.kind === 'regular' ? next.startTime! : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     if (!slotIsAvailable(availability, instructor.id, date.getDay(), time)) { window.alert(`${instructor.name} is not marked available at that time.`); return }
-    if (entryAtSlot(entries, instructor.id, date, time)) { window.alert('That time is already occupied.'); return }
-    const next: ScheduleEntry = entryKind === 'regular'
-      ? { id: crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument: entryInstrument, kind: entryKind, dayOfWeek: entryDay, startTime: entryTime }
-      : { id: crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument: entryInstrument, kind: entryKind, startsAt: date.toISOString() }
-    onEntriesChange([...entries, next])
+    if (entryAtSlot(entries.filter((entry) => entry.id !== next.id), instructor.id, date, time)) { window.alert('That time is already occupied.'); return }
+    onEntriesChange(entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next])
     onOpeningsChange(openings.filter((opening) => {
       if (opening.instructor !== instructor.name) return true
       const openingDate = new Date(opening.startsAt)
-      if (entryKind === 'regular') {
+      if (next.kind === 'regular') {
         const openingTime = `${String(openingDate.getHours()).padStart(2, '0')}:${String(openingDate.getMinutes()).padStart(2, '0')}`
-        return openingDate.getDay() !== entryDay || openingTime !== entryTime
+        return openingDate.getDay() !== next.dayOfWeek || openingTime !== next.startTime
       }
       return openingDate.getTime() !== date.getTime()
     }))
-    setStudentName('')
+    onScheduleLog({
+      action: existing ? 'Scheduled lesson updated' : 'Scheduled lesson added',
+      instructor: instructor.name,
+      studentName: next.studentName,
+      details: existing ? `${describeScheduleEntry(existing)} → ${describeScheduleEntry(next)}` : describeScheduleEntry(next),
+    })
+    setSlotEditor(null)
+  }
+
+  const removeEntry = (entry: ScheduleEntry) => {
+    if (!window.confirm(`Remove ${entry.studentName} from the schedule?`)) return
+    onEntriesChange(entries.filter((item) => item.id !== entry.id))
+    onScheduleLog({ action: 'Scheduled lesson removed', instructor: instructor.name, studentName: entry.studentName, details: describeScheduleEntry(entry) })
+    setSlotEditor(null)
   }
 
   return <section className="schedule-page">
     <div className="card schedule-toolbar">
       <label>Instructor<select value={instructor.id} onChange={(event) => changeInstructor(event.target.value)}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-      <label>Trial instrument<select value={trialInstrument} onChange={(event) => setTrialInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label>
       <div className="week-switcher"><button onClick={() => setWeekStart(datePlusDays(weekStart, -7))}>←</button><strong>{weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{datePlusDays(weekStart, 5).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong><button onClick={() => setWeekStart(datePlusDays(weekStart, 7))}>→</button></div>
-      <button className="primary" onClick={addNextOpenings}>＋ Add next 2 openings</button>
     </div>
 
     <div className="schedule-legend"><span className="legend-open">Available</span><span className="legend-regular">🔒 Regular student</span><span className="legend-dated">Dated lesson</span><span className="legend-offered">Trial opening</span><small>Click an available green cell to add or remove it from Text Now.</small></div>
@@ -420,17 +444,10 @@ function InstructorSchedule({ instructors, availability, entries, openings, onAv
           <label className="field">Day<select value={availabilityDay} onChange={(event) => setAvailabilityDay(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label>
           <div className="field-pair"><label className="field">From<input type="time" step="1800" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label><label className="field">To<input type="time" step="1800" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label></div>
           <button className="secondary full" onClick={addAvailability}>＋ Add available hours</button>
-          <div className="availability-chips">{availability.filter((block) => block.instructorId === instructor.id).map((block) => <span key={block.id}>{scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.short} {formatClock(block.startTime)}–{formatClock(block.endTime)}<button onClick={() => onAvailabilityChange(availability.filter((item) => item.id !== block.id))}>×</button></span>)}</div>
+          <div className="availability-chips">{availability.filter((block) => block.instructorId === instructor.id).map((block) => <span key={block.id}>{scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.short} {formatClock(block.startTime)}–{formatClock(block.endTime)}<button onClick={() => removeAvailability(block)}>×</button></span>)}</div>
         </div>
 
-        <div className="card schedule-setup">
-          <h2>Add scheduled lesson</h2><p>Regular lessons repeat; trials and one-time lessons use a date.</p>
-          <label className="field">Student<input required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>
-          <div className="field-pair"><label className="field">Type<select value={entryKind} onChange={(event) => setEntryKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select value={entryInstrument} onChange={(event) => setEntryInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-          {entryKind === 'regular' ? <div className="field-pair"><label className="field">Day<select value={entryDay} onChange={(event) => setEntryDay(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={entryTime} onChange={(event) => setEntryTime(event.target.value)} /></label></div> : <label className="field">Date and time<input type="datetime-local" step="1800" value={entryDateTime} onChange={(event) => setEntryDateTime(event.target.value)} /></label>}
-          <button className="primary full" onClick={addEntry}>＋ Add to schedule</button>
-          <div className="scheduled-list">{entries.filter((entry) => entry.instructorId === instructor.id).map((entry) => <span key={entry.id}><b>{entry.studentName}</b><small>{entry.kind === 'regular' ? `${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.short} ${formatClock(entry.startTime!)}` : formatTrialTime(entry.startsAt!)}</small><button onClick={() => onEntriesChange(entries.filter((item) => item.id !== entry.id))}>×</button></span>)}</div>
-        </div>
+        <div className="card schedule-tip"><strong>Add or edit lessons from the calendar</strong><p>Use the small <b>+</b> on an open slot to schedule a student. Click an occupied slot to edit it.</p></div>
       </aside>
 
       <div className="card schedule-board">
@@ -441,20 +458,60 @@ function InstructorSchedule({ instructors, availability, entries, openings, onAv
             const entry = entryAtSlot(entries, instructor.id, date, time)
             const startsAt = dateAtTime(date, time)
             const opening = openings.find((item) => item.instructor === instructor.name && new Date(item.startsAt).getTime() === startsAt.getTime())
+            const upcoming = !entry ? nextDatedEntryAtSlot(entries, instructor.id, date, time) : undefined
             const past = startsAt < new Date()
             const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}` : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
-            return <button type="button" disabled={Boolean(entry) || !available || past} className={className} key={`${localDateKey(date)}-${time}`} onClick={() => toggleOpening(date, time)}>{entry ? <><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small></> : opening ? <><strong>✓ Trial opening</strong><small>{opening.instrument}</small></> : available ? <span>{past ? '' : 'Open'}</span> : null}</button>
+            return <div className={className} key={`${localDateKey(date)}-${time}`}>
+              {entry ? <button type="button" className="cell-main" onClick={() => setSlotEditor({ date, time, entry })}><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small></button>
+                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : <span>{past ? '' : 'Open'}</span>}{upcoming && <small className="upcoming-note">Next {new Date(upcoming.startsAt!).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}: {upcoming.studentName}</small>}</button>{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}</>
+                  : upcoming ? <small className="upcoming-note">Next {new Date(upcoming.startsAt!).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}: {upcoming.studentName}</small> : null}
+            </div>
           })])}
         </div>
       </div>
     </div>
     <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
+    {slotEditor && <ScheduleEntryEditor instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} />}
   </section>
+}
+
+function ScheduleEntryEditor({ instructor, slot, onClose, onSave, onDelete }: {
+  instructor: Instructor
+  slot: { date: Date; time: string; entry?: ScheduleEntry }
+  onClose: () => void
+  onSave: (entry: ScheduleEntry) => void
+  onDelete?: () => void
+}) {
+  const existing = slot.entry
+  const initialDate = existing?.startsAt ? new Date(existing.startsAt) : dateAtTime(slot.date, slot.time)
+  const [studentName, setStudentName] = useState(existing?.studentName ?? '')
+  const [kind, setKind] = useState<ScheduleEntryKind>(existing?.kind ?? 'regular')
+  const [instrument, setInstrument] = useState(existing?.instrument ?? instructor.instruments[0])
+  const [dayOfWeek, setDayOfWeek] = useState(existing?.dayOfWeek ?? slot.date.getDay())
+  const [time, setTime] = useState(existing?.startTime ?? slot.time)
+  const [startsAt, setStartsAt] = useState(() => toDateTimeInput(initialDate))
+
+  const save = () => {
+    if (!studentName.trim()) return
+    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, studentName: studentName.trim(), instrument, kind }
+    onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time } : { ...base, startsAt: new Date(startsAt).toISOString() })
+  }
+
+  return <div className="overlay modal-overlay schedule-editor-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal schedule-editor">
+    <button type="button" className="close" onClick={onClose}>×</button>
+    <p className="eyebrow">{existing ? 'Edit scheduled lesson' : 'Add scheduled lesson'}</p>
+    <h2>{existing ? existing.studentName : `${scheduleDays.find((day) => day.dayOfWeek === slot.date.getDay())?.label} at ${formatClock(slot.time)}`}</h2>
+    {existing?.kind === 'regular' && <p className="editor-caution">🔒 This is a recurring lesson. Changes only take effect after you press Save.</p>}
+    <label className="field">Student<input autoFocus required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>
+    <div className="field-pair"><label className="field">Type<select value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+    {kind === 'regular' ? <div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={time} onChange={(event) => setTime(event.target.value)} /></label></div> : <label className="field">Date and time<input type="datetime-local" step="1800" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
+    <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
+  </section></div>
 }
 
 function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft: TextDraft; openings: TrialOpening[]; onClose: () => void; onManage: () => void; onSend: (message: string) => void }) {
   const [selected, setSelected] = useState<string[]>([])
-  const matches = openings.filter((opening) => opening.instrument.toLowerCase() === draft.lead.instrument.toLowerCase() && Date.parse(opening.startsAt) > Date.now())
+  const matches = openings.filter((opening) => opening.instruments.some((instrument) => instrument.toLowerCase() === draft.lead.instrument.toLowerCase()) && Date.parse(opening.startsAt) > Date.now())
     .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
   const chosen = selected.map((id) => matches.find((opening) => opening.id === id)).filter((opening): opening is TrialOpening => Boolean(opening))
   const preview = draft.message
@@ -480,7 +537,7 @@ function LeadPanel({ lead, trialOpenings, onClose, onLog, onTextNow, onUpdate, o
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
   const isActiveHotLead = lead.status === 'hot' && !lead.trialAt
   const recommendation = isNurture ? nextNurtureContact(lead, defaultAvailability) : nextContact(lead, defaultAvailability)
-  const matchingOpenings = trialOpenings.filter((opening) => opening.instrument.toLowerCase() === lead.instrument.toLowerCase() && Date.parse(opening.startsAt) > Date.now())
+  const matchingOpenings = trialOpenings.filter((opening) => opening.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()) && Date.parse(opening.startsAt) > Date.now())
   const nurtureTemplate = isNurture ? nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2) : undefined
   const activeTemplate = isActiveHotLead ? activeFollowUpFor(lead) : undefined
   const messageTemplate = nurtureTemplate ?? activeTemplate
@@ -491,9 +548,9 @@ function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead:
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [instrument, setInstrument] = useState('Piano')
-  const [source, setSource] = useState('Google')
+  const [source, setSource] = useState('Meta')
   const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date()))
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'hot', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option><option>Saxophone</option><option>Trumpet</option><option>Trombone</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Google</option><option>Facebook</option><option>Instagram</option><option>Referral</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'hot', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option><option>Saxophone</option><option>Trumpet</option><option>Trombone</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Meta</option><option>Website Traffic</option><option>WLS</option><option>Word of Mouth</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
 }
 
 export default App
