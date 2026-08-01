@@ -16,31 +16,38 @@ export function nurtureMessageFor(lead: Lead, contactAt: Date) {
   const instrument = lead.instrument.toLowerCase()
 
   if (week <= 2) return {
-    label: 'Week 2 · Simple check-in',
-    message: `Hi ${name}, just wanted to check in and see if you're still interested in ${instrument} lessons. If the timing isn't right yet, no worries—just let me know!`,
+    label: 'Week 2 · Call, then text',
+    message: `Hi ${name}, I wanted to check back in about ${instrument} lessons. Are you still interested in trying a free lesson, or has finding the right time been the main obstacle?`,
+    callFirst: true,
   }
   if (week <= 4) return {
-    label: 'Week 4 · Offer help',
-    message: `Hi ${name}, I just wanted to check in and see if there was anything that had been holding you back from getting started with ${instrument} lessons. Whether it's scheduling, pricing, or finding the right teacher, I'm happy to help.`,
+    label: 'Week 4 · Text only',
+    message: `Hi ${name}, just checking in about ${instrument} lessons. If scheduling, pricing, or finding the right instructor has been holding things up, I’m happy to help. Feel free to text me any questions.`,
+    callFirst: false,
   }
   if (week <= 6) return {
-    label: 'Week 6 · Availability',
-    message: `Hi ${name}, we had a couple of ${instrument} lesson openings come up this week, so I thought I'd check if you were still interested in getting started.`,
+    label: 'Week 6 · Call, then availability text',
+    message: `Hi ${name}, I wanted to check back in about ${instrument} lessons. What days or time ranges would make a free trial easiest for you? I’d be happy to check the schedule.`,
+    callFirst: true,
   }
   if (week <= 8) return {
-    label: 'Week 8 · No pressure',
-    message: `Hi ${name}, I know life gets busy! I just wanted to see whether ${instrument} lessons are still on your radar. No rush either way.`,
+    label: 'Week 8 · Text only',
+    message: `Hi ${name}, I know schedules get busy, so I wanted to see whether ${instrument} lessons are still on your radar. If you’d like, send me the days that usually work best and I can look for a trial time.`,
+    callFirst: false,
   }
   if (week <= 10) return {
-    label: 'Week 10 · Easy response',
-    message: `Hi ${name}, are you still thinking about ${instrument} lessons?\n1️⃣ Yes, I'd like to schedule.\n2️⃣ Maybe later.\n3️⃣ Not interested anymore.\nJust reply with the number that fits best.`,
+    label: 'Week 10 · Call, then easy-response text',
+    message: `Hi ${name}, are you still thinking about ${instrument} lessons?\n\n1️⃣ Yes, I’d like to schedule a free trial\n2️⃣ Maybe later\n3️⃣ I’m no longer interested\n4️⃣ I have a question\n\nJust reply with the number that fits best.`,
+    callFirst: true,
   }
   if (week <= 12) return {
-    label: 'Week 12 · Schedule update',
-    message: `Hi ${name}, we're updating our lesson schedule for the next few weeks. If you've still been thinking about ${instrument} lessons, I'd be happy to see what times are available.`,
+    label: 'Week 12 · Final regular nurture text',
+    message: `Hi ${name}, I wanted to make one last regular check-in about ${instrument} lessons. Apollo will be here whenever the timing is right.\n\nAfter this, I’ll only reach out occasionally when relevant openings or new scheduling options come up. If you’d rather not receive those updates, just let me know.`,
+    callFirst: false,
   }
   return {
-    label: `Week ${week} · Later follow-up`,
-    message: `Hi ${name}, just wanted to pop in and let you know we're still here whenever you're ready. We'd love to help you get started with ${instrument} lessons!`,
+    label: 'Long-term · Relevant opening only',
+    message: `Hi ${name}, a couple of ${instrument} trial openings have become available, so I wanted to check with you:\n\n1️⃣ [Day/Time 1]\n2️⃣ [Day/Time 2]\n\nWould either work for you?`,
+    callFirst: false,
   }
 }
