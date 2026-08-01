@@ -2,9 +2,15 @@ import type { Lead } from './types'
 
 const firstName = (lead: Lead) => lead.name.split(' ')[0]
 const instrumentName = (lead: Lead) => lead.instrument.toLowerCase()
+const contactDayCount = (lead: Lead) => new Set(lead.activities
+  .filter((activity) => activity.type === 'call' || activity.type === 'text')
+  .map((activity) => {
+    const date = new Date(activity.occurredAt)
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+  })).size
 
 export function activeFollowUpFor(lead: Lead) {
-  const textCount = lead.activities.filter((activity) => activity.type === 'text').length
+  const textCount = contactDayCount(lead)
   const name = firstName(lead)
   const instrument = instrumentName(lead)
 
