@@ -61,6 +61,7 @@ export type ScheduleEntryKind = 'regular' | 'trial' | 'one_time'
 export interface ScheduleEntry {
   id: string
   instructorId: string
+  leadId?: string
   studentName: string
   instrument: string
   kind: ScheduleEntryKind
