@@ -51,36 +51,36 @@ export const demoLeads: Lead[] = [
   {
     id: '1', name: 'Maya Thompson', phone: '(614) 555-0127', email: 'maya@example.com', instrument: 'Piano',
     receivedAt: hoursAgo(1.2), source: 'Meta', campaign: 'Summer Piano', status: 'hot', activities: [],
-    holdFormComplete: false, trialAttended: false, adCost: 24,
+    holdFormComplete: false, trialAttended: false,
   },
   {
     id: '2', name: 'Noah Williams', phone: '(614) 555-0192', email: 'noah@example.com', instrument: 'Guitar',
     receivedAt: hoursAgo(45), source: 'Website Traffic', campaign: 'Website inquiry', status: 'hot',
     activities: [{ id: 'a1', type: 'call', occurredAt: hoursAgo(42), outcome: 'Voicemail' }, { id: 'a2', type: 'text', occurredAt: hoursAgo(41.8), outcome: 'Intro text sent' }],
-    holdFormComplete: false, trialAttended: false, adCost: 31,
+    holdFormComplete: false, trialAttended: false,
   },
   {
     id: '3', name: 'Olivia Chen', phone: '(614) 555-0144', email: 'olivia@example.com', instrument: 'Voice',
     receivedAt: hoursAgo(118), source: 'Meta', campaign: 'Find Your Voice', status: 'hot',
     activities: [{ id: 'a3', type: 'call', occurredAt: hoursAgo(116), outcome: 'Connected' }],
-    trialAt: daysFromNow(2, 17), holdFormComplete: true, trialAttended: false, adCost: 19,
+    trialAt: daysFromNow(2, 17), holdFormComplete: true, trialAttended: false,
   },
   {
     id: '4', name: 'Liam Davis', phone: '(614) 555-0178', email: 'liam@example.com', instrument: 'Drums',
     receivedAt: hoursAgo(210), source: 'WLS', campaign: 'World Learner School', status: 'active_student',
     activities: [{ id: 'a4', type: 'call', occurredAt: hoursAgo(208), outcome: 'Connected' }, { id: 'a5', type: 'text', occurredAt: hoursAgo(190), outcome: 'Trial reminder' }],
-    trialAt: hoursAgo(72), holdFormComplete: true, trialAttended: true, enrolledAt: hoursAgo(48), adCost: 38,
+    trialAt: hoursAgo(72), holdFormComplete: true, trialAttended: true, enrolledAt: hoursAgo(48),
   },
   {
     id: '5', name: 'Ethan Rodriguez', phone: '(614) 555-0163', email: 'ethan@example.com', instrument: 'Saxophone',
     receivedAt: hoursAgo(480), source: 'Meta', campaign: 'Summer Music', status: 'nurture',
     activities: [{ id: 'a6', type: 'call', occurredAt: hoursAgo(475), outcome: 'Voicemail' }, { id: 'a7', type: 'text', occurredAt: hoursAgo(430), outcome: 'Follow-up sent' }],
-    holdFormComplete: false, trialAttended: false, adCost: 22,
+    holdFormComplete: false, trialAttended: false,
   },
   {
     id: '6', name: 'Sophia Martin', phone: '(614) 555-0116', email: 'sophia@example.com', instrument: 'Piano',
     receivedAt: hoursAgo(1080), source: 'Word of Mouth', campaign: 'Parent referral', status: 'nurture_long_term',
     activities: [{ id: 'a8', type: 'call', occurredAt: hoursAgo(1076), outcome: 'Interested next semester' }],
-    holdFormComplete: false, trialAttended: false, adCost: 0,
+    holdFormComplete: false, trialAttended: false,
   },
 ]
