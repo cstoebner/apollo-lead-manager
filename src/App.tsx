@@ -72,7 +72,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see which inquiries become students.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Sidebar labels and Next Actions columns now stay aligned.</span><span>Today is simplified to Next Actions and manual Action Pending lists.</span><span>Financial and advertising-cost tracking has been removed.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Upcoming outreach is previewed below Action Pending again.</span><span>Sidebar labels and Next Actions columns now stay aligned.</span><span>Today uses a manual Action Pending list.</span></div>
       </section>
     </main>
   )
@@ -190,7 +190,16 @@ function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }:
     }),
   ].filter((item) => !item.progress.complete).sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings])
   const now = new Date()
-  const queue = planned
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+  const queue = planned.filter(({ recommendation }) => recommendation.at <= endOfToday)
+  const upcomingMap = new Map<string, { date: Date; items: typeof planned }>()
+  planned.filter(({ recommendation }) => recommendation.at > endOfToday).forEach((item) => {
+    const key = item.recommendation.at.toDateString()
+    const group = upcomingMap.get(key) ?? { date: item.recommendation.at, items: [] }
+    group.items.push(item)
+    upcomingMap.set(key, group)
+  })
+  const upcomingDays = [...upcomingMap.values()].sort((a, b) => a.date.getTime() - b.date.getTime()).slice(0, 5)
 
   return <>
     <section className="card queue-card">
@@ -205,10 +214,17 @@ function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }:
             <div className="row-actions">{template.callFirst && <button disabled={progress.callLogged} onClick={() => onLog(lead.id, 'call')}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button><button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></div>
           </article>
         })}
-        {!queue.length && <div className="today-complete"><strong>No outreach scheduled</strong><span>New leads and cadence dates will appear here.</span></div>}
+        {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
     <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onTextNow={onTextNow} onTakeNote={onTakeNote} />
+    <section className="card upcoming-outreach-card">
+      <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
+      <div className="upcoming-outreach-list">{upcomingDays.map(({ date, items }) => {
+        const earliest = items[0].recommendation.at
+        return <article key={date.toDateString()}><div className="outreach-date"><strong>{date.toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div><div className="outreach-preview"><strong>{items.length} planned {items.length === 1 ? 'contact' : 'contacts'}</strong><span>{items.slice(0, 4).map((item) => `${item.lead.name} · ${item.template.label}`).join('  •  ')}{items.length > 4 ? `  •  +${items.length - 4} more` : ''}</span></div><b>Be available around {earliest.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</b></article>
+      })}{!upcomingDays.length && <div className="today-complete"><strong>No upcoming outreach scheduled</strong><span>New leads and future cadence dates will appear here.</span></div>}</div>
+    </section>
   </>
 }
 
