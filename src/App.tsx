@@ -69,7 +69,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <div className="brand-mark">A</div>
         <p className="eyebrow">Apollo Music Academy</p>
         <h1>Turn every new inquiry into a clear next step.</h1>
-        <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
+        <p className="welcome-copy">Follow up on time, fill more trials, and see which inquiries become students.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
         <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Today is simplified to Next Actions and manual Action Pending lists.</span><span>Financial and advertising-cost tracking has been removed.</span><span>Settings manages offered instruments and the instructor roster.</span></div>
