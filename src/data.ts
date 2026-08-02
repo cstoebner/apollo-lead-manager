@@ -39,12 +39,12 @@ export const demoInstructorAvailability: InstructorAvailability[] = [
 ]
 
 export const demoScheduleEntries: ScheduleEntry[] = [
-  { id: 'se1', instructorId: 'luke', studentName: 'Jordan', instrument: 'Guitar', kind: 'regular', dayOfWeek: 1, startTime: '17:30', startsOn: '2025-01-01' },
-  { id: 'se2', instructorId: 'luke', studentName: 'Mia', instrument: 'Guitar', kind: 'regular', dayOfWeek: 6, startTime: '11:30', startsOn: '2025-01-01' },
-  { id: 'se3', instructorId: 'luke', studentName: 'Theo', instrument: 'Guitar', kind: 'regular', dayOfWeek: 6, startTime: '12:00', startsOn: '2025-01-01' },
-  { id: 'se4', instructorId: 'faith', studentName: 'Sofia', instrument: 'Voice', kind: 'regular', dayOfWeek: 2, startTime: '17:30', startsOn: '2025-01-01' },
-  { id: 'se5', instructorId: 'faith', studentName: 'Amelia', instrument: 'Piano', kind: 'regular', dayOfWeek: 4, startTime: '18:00', startsOn: '2025-01-01' },
-  { id: 'se6', instructorId: 'kristina', studentName: 'Leo', instrument: 'Piano', kind: 'regular', dayOfWeek: 1, startTime: '16:00', startsOn: '2025-01-01' },
+  { id: 'se1', instructorId: 'luke', studentName: 'Jordan', instrument: 'Guitar', kind: 'regular', durationMinutes: 30, dayOfWeek: 1, startTime: '17:30', startsOn: '2025-01-01' },
+  { id: 'se2', instructorId: 'luke', studentName: 'Mia', instrument: 'Guitar', kind: 'regular', durationMinutes: 30, dayOfWeek: 6, startTime: '11:30', startsOn: '2025-01-01' },
+  { id: 'se3', instructorId: 'luke', studentName: 'Theo', instrument: 'Guitar', kind: 'regular', durationMinutes: 30, dayOfWeek: 6, startTime: '12:00', startsOn: '2025-01-01' },
+  { id: 'se4', instructorId: 'faith', studentName: 'Sofia', instrument: 'Voice', kind: 'regular', durationMinutes: 30, dayOfWeek: 2, startTime: '17:30', startsOn: '2025-01-01' },
+  { id: 'se5', instructorId: 'faith', studentName: 'Amelia', instrument: 'Piano', kind: 'regular', durationMinutes: 30, dayOfWeek: 4, startTime: '18:00', startsOn: '2025-01-01' },
+  { id: 'se6', instructorId: 'kristina', studentName: 'Leo', instrument: 'Piano', kind: 'regular', durationMinutes: 30, dayOfWeek: 1, startTime: '16:00', startsOn: '2025-01-01' },
 ]
 
 export const demoLeads: Lead[] = [
