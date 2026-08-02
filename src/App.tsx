@@ -17,6 +17,7 @@ type ManualActivityType = Extract<ActivityType, 'call' | 'text' | 'email' | 'not
 type ManualEventType = ManualActivityType | 'trial_booked' | 'trial_form_completed' | 'trial_completed' | 'became_student' | 'unenrolled'
 type ManualActivityInput = { leadId: string; activityId?: string; type: ManualEventType; occurredAt: string; outcome: string; trialAt?: string }
 type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
+type PendingActionItem = { lead: Lead; reason: 'manual' | 'trial_form' | 'post_trial'; action: string; template?: MessageTemplate }
 
 const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
@@ -53,6 +54,11 @@ const formatDate = (value: string | Date, includeTime = true) => new Intl.DateTi
 const formatTrialTime = (value: string | Date) => new Intl.DateTimeFormat('en-US', {
   weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
 }).format(new Date(value))
+
+const trialFormReminderFor = (lead: Lead): MessageTemplate => ({
+  label: 'TRIAL FORM REMINDER',
+  message: `Hi ${lead.name.split(' ')[0]},\n\nThe last step to confirm ${lead.studentName && lead.studentName !== lead.name ? `${lead.studentName}'s` : 'your'} free ${lead.instrument.toLowerCase()} trial lesson on ${formatTrialTime(lead.trialAt!)} is to complete our registration form and reserve the time.\n\nWe do require a credit card on file to hold the appointment. The lesson itself is completely free; the card would only be charged the $35 fee if the lesson is canceled or rescheduled with less than 24 hours’ notice or if the student does not attend.\n\nPlease let me know if you need the registration link again or have any questions. I’m happy to help!`,
+})
 
 const toDateTimeInput = (date: Date) => {
   const offset = date.getTimezoneOffset()
@@ -117,7 +123,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see which inquiries become students.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Secure Supabase sign-in and permanent data storage are connected.</span><span>Upcoming outreach is previewed below Action Pending.</span><span>Sidebar labels and Next Actions columns stay aligned.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Instructor schedules now use 15-minute increments and support 30-, 45-, and 60-minute lessons.</span><span>Trial form reminders and post-trial booking tasks appear automatically under Action Pending.</span><span>Every activity can be deleted with a 10-second Undo window.</span></div>
       </section>
     </main>
   )
@@ -301,7 +307,16 @@ function NavButton({ active, onClick, icon, label }: { active: boolean; onClick:
 
 function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }: { leads: Lead[]; trialOpenings: TrialOpening[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText; onTakeNote: (id: string) => void }) {
   const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt)
-  const pending = leads.filter((lead) => lead.status === 'action_pending')
+  const pending: PendingActionItem[] = leads.flatMap<PendingActionItem>((lead) => {
+    if (lead.trialAt && lead.holdFormComplete && lead.trialAttended && Date.parse(lead.trialAt) <= Date.now() && lead.status !== 'active_student' && lead.status !== 'unenrolled') {
+      return [{ lead, reason: 'post_trial' as const, action: 'Trial completed · needs regular lesson booking' }]
+    }
+    if (lead.trialAt && !lead.holdFormComplete && !lead.trialAttended && lead.status !== 'unenrolled') {
+      return [{ lead, reason: 'trial_form' as const, action: 'Send trial confirmation form reminder', template: trialFormReminderFor(lead) }]
+    }
+    if (lead.status === 'action_pending') return [{ lead, reason: 'manual' as const, action: 'Manual follow-up needed' }]
+    return []
+  })
   const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'nurture_long_term')
   const planned = useMemo(() => [
     ...active.map((lead) => ({ lead, kind: 'active' as const, recommendation: nextContact(lead, defaultAvailability), template: activeFollowUpFor(lead), progress: activeCadenceState(lead) })),
@@ -350,16 +365,15 @@ function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }:
   </>
 }
 
-function PendingActions({ leads, onSelect, onLog, onTextNow, onTakeNote }: { leads: Lead[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText; onTakeNote: (id: string) => void }) {
+function PendingActions({ leads, onSelect, onLog, onTextNow, onTakeNote }: { leads: PendingActionItem[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText; onTakeNote: (id: string) => void }) {
   return <section className="card pending-card">
-    <div className="section-head"><div><h2>Action pending</h2><p>Leads you manually marked for a specific follow-up.</p></div></div>
-    <div className="pending-list">{leads.map((lead) => {
-      const action = lead.trialAt ? lead.trialAttended ? 'Trial completed · follow-up needed' : `Trial ${formatDate(lead.trialAt)}` : 'Manual follow-up needed'
-      return <article key={lead.id} className="pending-row">
+    <div className="section-head"><div><h2>Action pending</h2><p>Trial milestones and manual follow-ups that still need your attention.</p></div></div>
+    <div className="pending-list">{leads.map(({ lead, reason, action, template }) => {
+      return <article key={lead.id} className={`pending-row pending-${reason}`}>
         <button className="pending-person" onClick={() => onSelect(lead.id)}><span><strong>{lead.name}</strong><small>{lead.instrument} · {lead.source}</small></span><b>{action}</b><i>Open →</i></button>
-        <div className="row-actions"><button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button><button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button><button onClick={() => onTextNow(lead)}>↗ Text now</button></div>
+        <div className="row-actions">{reason !== 'trial_form' && <button onClick={() => onLog(lead.id, 'call')}>☎ Log call</button>}<button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>{reason !== 'post_trial' && <button className={reason === 'trial_form' ? 'text-now' : ''} onClick={() => onTextNow(lead, template)}>↗ Text now</button>}</div>
       </article>
-    })}{!leads.length && <div className="today-complete"><strong>No actions pending</strong><span>Change a lead’s status to Action Pending when you need a manual reminder.</span></div>}</div>
+    })}{!leads.length && <div className="today-complete"><strong>No actions pending</strong><span>Scheduled trial reminders and manual follow-ups will appear here.</span></div>}</div>
   </section>
 }
 
@@ -394,11 +408,15 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
   const [range, setRange] = useState<'month' | 'year'>('month')
   const [anchor, setAnchor] = useState(() => new Date())
   const [activityEditor, setActivityEditor] = useState<ManualActivityInput | null>(null)
+  const [pendingDeletions, setPendingDeletions] = useState<{ key: string; label: string; timerId: number }[]>([])
   const allEntries = [
     ...leads.flatMap((lead) => lead.activities.map((activity) => ({ kind: 'lead' as const, lead, activity, occurredAt: activity.occurredAt }))),
     ...scheduleActivities.map((activity) => ({ kind: 'schedule' as const, activity, occurredAt: activity.occurredAt })),
   ].sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+  const pendingKeys = new Set(pendingDeletions.map((item) => item.key))
   const entries = allEntries.filter((entry) => {
+    const key = `${entry.kind}-${entry.activity.id}`
+    if (pendingKeys.has(key)) return false
     const date = new Date(entry.occurredAt)
     return date.getFullYear() === anchor.getFullYear() && (range === 'year' || date.getMonth() === anchor.getMonth())
   })
@@ -431,12 +449,25 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
     link.click(); URL.revokeObjectURL(url)
   }
 
-  const remove = (leadId: string, activityId: string) => {
-    if (window.confirm('Delete this activity?')) onDelete(leadId, activityId)
+  const queueDeletion = (key: string, label: string, commit: () => void) => {
+    if (pendingDeletions.some((item) => item.key === key)) return
+    const timerId = window.setTimeout(() => {
+      commit()
+      setPendingDeletions((current) => current.filter((item) => item.key !== key))
+    }, 10_000)
+    setPendingDeletions((current) => [...current, { key, label, timerId }])
   }
+  const remove = (leadId: string, activityId: string) => queueDeletion(`lead-${activityId}`, 'Activity deleted', () => onDelete(leadId, activityId))
   const removeSchedule = (id: string) => {
-    if (window.confirm('Delete this schedule log entry? This will not undo the calendar change.')) onDeleteSchedule(id)
+    queueDeletion(`schedule-${id}`, 'Schedule log deleted', () => onDeleteSchedule(id))
   }
+  const undoDeletion = (key: string) => {
+    const pending = pendingDeletions.find((item) => item.key === key)
+    if (!pending) return
+    window.clearTimeout(pending.timerId)
+    setPendingDeletions((current) => current.filter((item) => item.key !== key))
+  }
+  const latestDeletion = pendingDeletions[pendingDeletions.length - 1]
 
   return <><section className="card activity-card">
     <div className="section-head activity-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><div className="activity-controls"><button className="primary add-event-button" disabled={!leads.length} onClick={() => setActivityEditor({ leadId: leads[0]?.id ?? '', type: 'call', occurredAt: new Date().toISOString(), outcome: 'Attempted call' })}>＋ Add event</button><div className="range-toggle"><button className={range === 'month' ? 'active' : ''} onClick={() => setRange('month')}>Month</button><button className={range === 'year' ? 'active' : ''} onClick={() => setRange('year')}>Year</button></div><div className="period-switch"><button onClick={() => shiftPeriod(-1)}>←</button><strong>{periodLabel}</strong><button onClick={() => shiftPeriod(1)}>→</button></div><button className="export-button" disabled={!entries.length} onClick={exportCsv}>⇩ Export CSV</button><span className="count-pill">{entries.length} actions</span></div></div>
@@ -446,7 +477,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
         <button className="activity-person" onClick={() => onSelect(entry.lead.id)}><strong>{entry.lead.name}</strong><span>{entry.lead.instrument} · {entry.lead.phone}</span></button>
         <div className="activity-detail"><strong>{entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'email' ? 'Email logged' : entry.activity.type === 'note' ? 'Note added' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.type === 'lead_created' ? 'New lead received' : entry.activity.type === 'lead_update' ? 'Lead information updated' : entry.activity.outcome}</strong><span>{entry.activity.outcome}</span></div>
         <time>{formatDate(entry.activity.occurredAt)}</time>
-        {(entry.activity.type === 'call' || entry.activity.type === 'text' || entry.activity.type === 'note' || entry.activity.type === 'email') && <div className="activity-row-actions"><button className="edit-action" onClick={() => setActivityEditor({ leadId: entry.lead.id, activityId: entry.activity.id, type: entry.activity.type as ManualActivityType, occurredAt: entry.activity.occurredAt, outcome: entry.activity.outcome })}>Edit</button><button className="delete-action" onClick={() => remove(entry.lead.id, entry.activity.id)} aria-label={`Delete ${entry.activity.type} for ${entry.lead.name}`}>Delete</button></div>}
+        <div className="activity-row-actions">{(entry.activity.type === 'call' || entry.activity.type === 'text' || entry.activity.type === 'note' || entry.activity.type === 'email') && <button className="edit-action" onClick={() => setActivityEditor({ leadId: entry.lead.id, activityId: entry.activity.id, type: entry.activity.type as ManualActivityType, occurredAt: entry.activity.occurredAt, outcome: entry.activity.outcome })}>Edit</button>}<button className="delete-action" onClick={() => remove(entry.lead.id, entry.activity.id)} aria-label={`Delete ${entry.activity.type} for ${entry.lead.name}`}>Delete</button></div>
       </article> : <article className="activity-row" key={`schedule-${entry.activity.id}`}>
         <div className="activity-icon schedule">◫</div>
         <div className="activity-person static"><strong>{entry.activity.studentName ?? entry.activity.instructor}</strong><span>{entry.activity.studentName ? `${entry.activity.instructor} · Instructor schedule` : 'Instructor schedule'}</span></div>
@@ -456,7 +487,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
       </article>)}
       {!entries.length && <div className="empty-state"><strong>No activity in {periodLabel}</strong><span>Use the arrows or switch to the yearly view.</span></div>}
     </div>
-  </section>{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}</>
+  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}</>
 }
 
 function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[]; initial: ManualActivityInput; onClose: () => void; onSave: (input: ManualActivityInput) => void }) {
@@ -556,8 +587,8 @@ const scheduleDays = [
   { label: 'Wednesday', short: 'Wed', dayOfWeek: 3 }, { label: 'Thursday', short: 'Thu', dayOfWeek: 4 },
   { label: 'Friday', short: 'Fri', dayOfWeek: 5 }, { label: 'Saturday', short: 'Sat', dayOfWeek: 6 },
 ]
-const scheduleTimes = Array.from({ length: 23 }, (_, index) => {
-  const minutes = 600 + index * 30
+const scheduleTimes = Array.from({ length: 55 }, (_, index) => {
+  const minutes = 480 + index * 15
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
 })
 const timeMinutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
@@ -579,18 +610,45 @@ function slotIsAvailable(availability: InstructorAvailability[], instructorId: s
   return availability.some((block) => block.instructorId === instructorId && block.dayOfWeek === dayOfWeek && minute >= timeMinutes(block.startTime) && minute < timeMinutes(block.endTime))
 }
 
+function lessonFitsAvailability(availability: InstructorAvailability[], instructorId: string, dayOfWeek: number, time: string, durationMinutes: number) {
+  const start = timeMinutes(time)
+  const end = start + durationMinutes
+  return availability.some((block) => block.instructorId === instructorId && block.dayOfWeek === dayOfWeek && start >= timeMinutes(block.startTime) && end <= timeMinutes(block.endTime))
+}
+
+function entryOccursOnDate(entry: ScheduleEntry, date: Date) {
+  if (entry.kind === 'regular') {
+    const key = localDateKey(date)
+    return entry.dayOfWeek === date.getDay()
+      && (!entry.startsOn || key >= entry.startsOn)
+      && (!entry.endsOn || key <= entry.endsOn)
+      && !entry.skippedDates?.includes(key)
+  }
+  return Boolean(entry.startsAt && localDateKey(new Date(entry.startsAt)) === localDateKey(date))
+}
+
+function entryStartTime(entry: ScheduleEntry) {
+  if (entry.kind === 'regular') return entry.startTime!
+  const startsAt = new Date(entry.startsAt!)
+  return `${String(startsAt.getHours()).padStart(2, '0')}:${String(startsAt.getMinutes()).padStart(2, '0')}`
+}
+
+function timesOverlap(firstTime: string, firstDuration: number, secondTime: string, secondDuration: number) {
+  const firstStart = timeMinutes(firstTime)
+  const secondStart = timeMinutes(secondTime)
+  return firstStart < secondStart + secondDuration && secondStart < firstStart + firstDuration
+}
+
 function entryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  return entries.find((entry) => entry.instructorId === instructorId && entryOccursOnDate(entry, date) && entryStartTime(entry) === time)
+}
+
+function entryOccupyingSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  const slot = timeMinutes(time)
   return entries.find((entry) => {
-    if (entry.instructorId !== instructorId) return false
-    if (entry.kind === 'regular') {
-      if (entry.dayOfWeek !== date.getDay() || entry.startTime !== time) return false
-      const key = localDateKey(date)
-      if (entry.skippedDates?.includes(key)) return false
-      return (!entry.startsOn || key >= entry.startsOn) && (!entry.endsOn || key <= entry.endsOn)
-    }
-    if (!entry.startsAt) return false
-    const startsAt = new Date(entry.startsAt)
-    return localDateKey(startsAt) === localDateKey(date) && `${String(startsAt.getHours()).padStart(2, '0')}:${String(startsAt.getMinutes()).padStart(2, '0')}` === time
+    if (entry.instructorId !== instructorId || !entryOccursOnDate(entry, date)) return false
+    const start = timeMinutes(entryStartTime(entry))
+    return slot >= start && slot < start + (entry.durationMinutes ?? 30)
   })
 }
 
@@ -632,8 +690,8 @@ function UpcomingSlotNotes({ entries, onEdit }: { entries: ScheduleEntry[]; onEd
 }
 
 function describeScheduleEntry(entry: ScheduleEntry) {
-  if (entry.kind === 'regular') return `${entry.instrument} · Every ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)} · Starting ${new Date(`${entry.startsOn}T00:00:00`).toLocaleDateString('en-US')}`
-  return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)}`
+  if (entry.kind === 'regular') return `${entry.instrument} · Every ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)} · ${entry.durationMinutes ?? 30} minutes · Starting ${new Date(`${entry.startsOn}T00:00:00`).toLocaleDateString('en-US')}`
+  return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)} · ${entry.durationMinutes ?? 30} minutes`
 }
 
 function InstructorSchedule({ leads, instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange }: {
@@ -698,7 +756,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     const date = next.kind === 'regular' ? new Date(`${next.startsOn}T${next.startTime}:00`) : new Date(next.startsAt!)
     const time = next.kind === 'regular' ? next.startTime! : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     if (next.kind === 'regular' && date.getDay() !== next.dayOfWeek) { window.alert(`The start date must fall on ${scheduleDays.find((day) => day.dayOfWeek === next.dayOfWeek)?.label}.`); return }
-    if (!slotIsAvailable(availability, instructor.id, date.getDay(), time)) { window.alert(`${instructor.name} is not marked available at that time.`); return }
+    if (!lessonFitsAvailability(availability, instructor.id, date.getDay(), time, next.durationMinutes ?? 30)) { window.alert(`${instructor.name} is not marked available for that entire lesson.`); return }
     if (next.kind === 'regular') {
       const nextStart = next.startsOn ?? '0000-00-00'
       const nextEnd = next.endsOn ?? '9999-12-31'
@@ -706,12 +764,15 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
         && entry.instructorId === instructor.id
         && entry.kind === 'regular'
         && entry.dayOfWeek === next.dayOfWeek
-        && entry.startTime === next.startTime
+        && timesOverlap(entry.startTime!, entry.durationMinutes ?? 30, next.startTime!, next.durationMinutes ?? 30)
         && (entry.startsOn ?? '0000-00-00') <= nextEnd
         && nextStart <= (entry.endsOn ?? '9999-12-31'))
       if (recurringConflict) { window.alert('Another regular student already owns this weekly time. Open a specific absence date, then add a trial or one-time lesson there.'); return }
     }
-    if (entryAtSlot(entries.filter((entry) => entry.id !== next.id), instructor.id, date, time)) { window.alert('That time is already occupied.'); return }
+    const conflictingEntry = entries.filter((entry) => entry.id !== next.id).find((entry) => entry.instructorId === instructor.id
+      && entryOccursOnDate(entry, date)
+      && timesOverlap(entryStartTime(entry), entry.durationMinutes ?? 30, time, next.durationMinutes ?? 30))
+    if (conflictingEntry) { window.alert(`That lesson overlaps ${conflictingEntry.studentName}'s scheduled time.`); return }
     onEntriesChange(entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next])
     onOpeningsChange(openings.filter((opening) => {
       if (opening.instructor !== instructor.name) return true
@@ -778,7 +839,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
         <div className="card schedule-setup">
           <h2>Weekly availability</h2><p>Green hours repeat every week.</p>
           <label className="field">Day<select value={availabilityDay} onChange={(event) => setAvailabilityDay(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label>
-          <div className="field-pair"><label className="field">From<input type="time" step="1800" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label><label className="field">To<input type="time" step="1800" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label></div>
+          <div className="field-pair"><label className="field">From<input type="time" step="900" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label><label className="field">To<input type="time" step="900" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label></div>
           <button className="secondary full" onClick={addAvailability}>＋ Add available hours</button>
           <div className="availability-chips">{availability.filter((block) => block.instructorId === instructor.id).map((block) => <span key={block.id}>{scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.short} {formatClock(block.startTime)}–{formatClock(block.endTime)}<button onClick={() => removeAvailability(block)}>×</button></span>)}</div>
         </div>
@@ -791,15 +852,16 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
           <div className="schedule-corner">Time</div>{weekDates.map((date, index) => <div className="schedule-day" key={date.toISOString()}><strong>{scheduleDays[index].short}</strong><small>{date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}</small></div>)}
           {scheduleTimes.flatMap((time) => [<div className="schedule-time" key={`time-${time}`}>{formatClock(time)}</div>, ...weekDates.map((date) => {
             const available = slotIsAvailable(availability, instructor.id, date.getDay(), time)
-            const entry = entryAtSlot(entries, instructor.id, date, time)
+            const entry = entryOccupyingSlot(entries, instructor.id, date, time)
+            const entryStartsHere = entry ? entryAtSlot(entries, instructor.id, date, time)?.id === entry.id : false
             const skippedRegular = entry ? undefined : skippedRegularAtSlot(entries, instructor.id, date, time)
             const startsAt = dateAtTime(date, time)
             const opening = openings.find((item) => item.instructor === instructor.name && new Date(item.startsAt).getTime() === startsAt.getTime())
             const upcoming = upcomingEntriesAtSlot(entries, instructor.id, date, time)
             const past = startsAt < new Date()
-            const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
+            const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
             return <div className={className} key={`${localDateKey(date)}-${time}`}>
-              {entry ? <><button type="button" className="cell-main" onClick={() => setSlotEditor({ date, time, entry })}><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : `${entry.kind === 'trial' ? 'Trial' : 'One-time'} · ${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}`}</small></button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>
+              {entry ? <><button type="button" className="cell-main" aria-label={`Edit ${entry.studentName}`} onClick={() => setSlotEditor({ date, time: entryStartTime(entry), entry })}>{entryStartsHere && <><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : 'One-time'} · {entry.durationMinutes ?? 30} min</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
                 : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
                   : <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}
             </div>
@@ -843,6 +905,7 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
   const [studentName, setStudentName] = useState(existing?.studentName ?? matchedExistingLead?.studentName ?? matchedExistingLead?.name ?? '')
   const [kind, setKind] = useState<ScheduleEntryKind>(existing?.kind ?? 'regular')
   const [instrument, setInstrument] = useState(existing?.instrument ?? instructor.instruments[0])
+  const [durationMinutes, setDurationMinutes] = useState<30 | 45 | 60>(existing?.durationMinutes ?? 30)
   const [dayOfWeek, setDayOfWeek] = useState(existing?.dayOfWeek ?? slot.date.getDay())
   const [time, setTime] = useState(existing?.startTime ?? slot.time)
   const [startsOn, setStartsOn] = useState(existing?.startsOn ?? localDateKey(slot.date))
@@ -851,7 +914,7 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
   const save = () => {
     if (!selectedLeadId && !existing) { window.alert('Choose a student or lead from the search list.'); return }
     if (!studentName.trim()) return
-    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: selectedLeadId || existing?.leadId, studentName: studentName.trim(), instrument, kind }
+    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: selectedLeadId || existing?.leadId, studentName: studentName.trim(), instrument, kind, durationMinutes }
     onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn, skippedDates: existing?.skippedDates } : { ...base, startsAt: new Date(startsAt).toISOString() })
   }
 
@@ -862,7 +925,8 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
     {existing?.kind === 'regular' && <p className="editor-caution">🔒 This weekly time belongs to {existing.studentName}. Use “Open this date” for a one-week absence.</p>}
     <LeadSearchPicker leads={leads} instructor={instructor} selectedLeadId={selectedLeadId} initialName={studentName} onClear={() => { setSelectedLeadId(''); setStudentName('') }} onSelect={(lead) => { setSelectedLeadId(lead.id); setStudentName(lead.studentName ?? lead.name); setInstrument(lead.instrument) }} />
     <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select disabled={Boolean(selectedLeadId)} value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-    {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="1800" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
+    <label className="field">Lesson length<select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value) as 30 | 45 | 60)}><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></label>
+    {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="900" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="900" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
     <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}{onSkipDate && <button type="button" className="absence-button" onClick={onSkipDate}>Open this date</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
   </section></div>
 }
