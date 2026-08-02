@@ -11,6 +11,7 @@ export interface Activity {
 export interface Lead {
   id: string
   name: string
+  studentName?: string
   phone: string
   email: string
   instrument: string
