@@ -53,6 +53,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
     leads: (leadResult.data ?? []).map((row) => ({
       id: row.id,
       name: row.name,
+      studentName: row.student_name ?? undefined,
       phone: row.phone ?? '',
       email: row.email ?? '',
       instrument: row.instrument,
@@ -107,6 +108,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
 const leadRow = (lead: Lead) => ({
   id: lead.id,
   name: lead.name,
+  student_name: lead.studentName ?? null,
   phone: lead.phone || null,
   email: lead.email || null,
   instrument: lead.instrument,
