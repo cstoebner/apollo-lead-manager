@@ -1,4 +1,4 @@
-export type LeadStatus = 'active_student' | 'hot' | 'nurture' | 'nurture_long_term' | 'unresponsive'
+export type LeadStatus = 'active_student' | 'hot' | 'action_pending' | 'nurture' | 'nurture_long_term' | 'unresponsive'
 export type ActivityType = 'call' | 'text' | 'email' | 'note' | 'status_change' | 'trial_update'
 
 export interface Activity {
@@ -23,7 +23,6 @@ export interface Lead {
   holdFormComplete: boolean
   trialAttended: boolean
   enrolledAt?: string
-  adCost: number
 }
 
 export interface Availability {
