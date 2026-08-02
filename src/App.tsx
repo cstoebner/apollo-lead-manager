@@ -3,7 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, nextContact, nextNurtureContact, nurtureCadenceState } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
-import { loadWorkspaceData, removeActivity as removeStoredActivity, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveLead, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
+import { loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveLead, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured, supabase } from './supabase'
 import type { Activity, ActivityType, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
@@ -13,7 +13,7 @@ type MessageTemplate = { label: string; message: string; needsTimes?: boolean; c
 type StartText = (lead: Lead, template?: MessageTemplate) => void
 type TextDraft = { lead: Lead; label: string; message: string }
 type ScheduleLogInput = Omit<ScheduleActivity, 'id' | 'occurredAt'>
-type ManualActivityType = Exclude<ActivityType, 'status_change' | 'trial_update'>
+type ManualActivityType = Extract<ActivityType, 'call' | 'text' | 'email' | 'note'>
 type ManualEventType = ManualActivityType | 'trial_booked' | 'trial_form_completed' | 'trial_completed' | 'became_student' | 'unenrolled'
 type ManualActivityInput = { leadId: string; activityId?: string; type: ManualEventType; occurredAt: string; outcome: string; trialAt?: string }
 type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
@@ -143,7 +143,15 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   useEffect(() => {
     if (!isSupabaseConfigured) return
     void loadWorkspaceData().then((data) => {
-      setLeads(data.leads)
+      const createdActivities = data.leads.flatMap((lead) => lead.activities.some((activity) => activity.type === 'lead_created') ? [] : [{
+        leadId: lead.id,
+        activity: { id: crypto.randomUUID(), type: 'lead_created' as const, occurredAt: lead.receivedAt, outcome: 'New lead received' },
+      }])
+      setLeads(data.leads.map((lead) => {
+        const created = createdActivities.find((item) => item.leadId === lead.id)?.activity
+        return created ? { ...lead, activities: [created, ...lead.activities] } : lead
+      }))
+      if (createdActivities.length) void Promise.all(createdActivities.map(({ leadId, activity }) => saveActivity(leadId, activity))).catch((error: Error) => setDataError(`Lead history could not be completed: ${error.message}`))
       setInstructors(data.instructors)
       setInstructorAvailability(data.availability)
       setScheduleEntries(data.entries)
@@ -166,7 +174,32 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     void openMessages(lead.phone, template?.message)
   }
 
-  const addLead = (lead: Lead) => { setLeads((current) => [lead, ...current]); persist(saveLead(lead)); setShowNewLead(false) }
+  const addLead = (lead: Lead) => {
+    const activity: Activity = { id: crypto.randomUUID(), type: 'lead_created', occurredAt: lead.receivedAt, outcome: 'New lead received' }
+    const next = { ...lead, activities: [activity] }
+    setLeads((current) => [next, ...current])
+    persist(Promise.all([saveLead(lead), saveActivity(lead.id, activity)]))
+    setShowNewLead(false)
+  }
+  const updateLeadInfo = (id: string, update: Partial<Lead>) => {
+    const lead = leads.find((item) => item.id === id)
+    if (!lead) return
+    const labels: Partial<Record<keyof Lead, string>> = { name: 'lead name', studentName: 'student name', phone: 'phone', email: 'email', instrument: 'instrument', receivedAt: 'inquiry date', source: 'source', campaign: 'campaign' }
+    const changed = (Object.keys(update) as (keyof Lead)[]).filter((key) => lead[key] !== update[key]).map((key) => labels[key]).filter(Boolean)
+    if (!changed.length) return
+    const activity: Activity = { id: crypto.randomUUID(), type: 'lead_update', occurredAt: new Date().toISOString(), outcome: `Lead information updated: ${changed.join(', ')}` }
+    const next = { ...lead, ...update, activities: [...lead.activities, activity] }
+    setLeads((current) => current.map((item) => item.id === id ? next : item))
+    persist(Promise.all([saveLead(next), saveActivity(id, activity)]))
+  }
+  const deleteLead = (id: string) => {
+    const lead = leads.find((item) => item.id === id)
+    if (!lead || !window.confirm(`Permanently delete ${lead.name}? This will also delete their activity history and linked schedule entries. Use Unenrolled instead for a real former student.`)) return
+    setLeads((current) => current.filter((item) => item.id !== id))
+    setScheduleEntries((current) => current.filter((entry) => entry.leadId !== id))
+    setSelectedId(null)
+    persist(removeStoredLead(id))
+  }
   const logActivity = (id: string, type: ActivityType) => {
     const activity: Activity = { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), outcome: type === 'call' ? 'Attempted call' : 'Message sent' }
     setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, activities: [...lead.activities, activity] } : lead))
@@ -254,7 +287,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} />}
       </main>
 
-      {selected && <LeadPanel lead={selected} trialOpenings={trialOpenings} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onStatusChange={changeStatus} onDelete={deleteActivity} />}
+      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} />}
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
@@ -384,7 +417,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
     const cell = (value: string) => `"${value.replace(/"/g, '""')}"`
     const rows = entries.map((entry) => {
       if (entry.kind === 'lead') {
-        const action = entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'email' ? 'Email logged' : entry.activity.type === 'note' ? 'Note added' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.outcome
+        const action = entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'email' ? 'Email logged' : entry.activity.type === 'note' ? 'Note added' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.type === 'lead_created' ? 'New lead received' : entry.activity.type === 'lead_update' ? 'Lead information updated' : entry.activity.outcome
         return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Lead', entry.lead.name, '', action, entry.activity.outcome]
       }
       return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Schedule', entry.activity.studentName ?? '', entry.activity.instructor, entry.activity.action, entry.activity.details]
@@ -409,9 +442,9 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
     <div className="section-head activity-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><div className="activity-controls"><button className="primary add-event-button" disabled={!leads.length} onClick={() => setActivityEditor({ leadId: leads[0]?.id ?? '', type: 'call', occurredAt: new Date().toISOString(), outcome: 'Attempted call' })}>＋ Add event</button><div className="range-toggle"><button className={range === 'month' ? 'active' : ''} onClick={() => setRange('month')}>Month</button><button className={range === 'year' ? 'active' : ''} onClick={() => setRange('year')}>Year</button></div><div className="period-switch"><button onClick={() => shiftPeriod(-1)}>←</button><strong>{periodLabel}</strong><button onClick={() => shiftPeriod(1)}>→</button></div><button className="export-button" disabled={!entries.length} onClick={exportCsv}>⇩ Export CSV</button><span className="count-pill">{entries.length} actions</span></div></div>
     <div className="activity-list">
       {entries.map((entry) => entry.kind === 'lead' ? <article className="activity-row" key={`lead-${entry.activity.id}`}>
-        <div className={`activity-icon ${entry.activity.type}`}>{entry.activity.type === 'call' ? '☎' : entry.activity.type === 'text' ? '↗' : entry.activity.type === 'email' ? '✉' : entry.activity.type === 'note' ? '✎' : entry.activity.type === 'status_change' ? '↻' : entry.activity.type === 'trial_update' ? '◇' : '•'}</div>
+        <div className={`activity-icon ${entry.activity.type}`}>{entry.activity.type === 'call' ? '☎' : entry.activity.type === 'text' ? '↗' : entry.activity.type === 'email' ? '✉' : entry.activity.type === 'note' ? '✎' : entry.activity.type === 'status_change' ? '↻' : entry.activity.type === 'trial_update' ? '◇' : entry.activity.type === 'lead_created' ? '＋' : entry.activity.type === 'lead_update' ? '✎' : '•'}</div>
         <button className="activity-person" onClick={() => onSelect(entry.lead.id)}><strong>{entry.lead.name}</strong><span>{entry.lead.instrument} · {entry.lead.phone}</span></button>
-        <div className="activity-detail"><strong>{entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'email' ? 'Email logged' : entry.activity.type === 'note' ? 'Note added' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.outcome}</strong><span>{entry.activity.outcome}</span></div>
+        <div className="activity-detail"><strong>{entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'email' ? 'Email logged' : entry.activity.type === 'note' ? 'Note added' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.type === 'lead_created' ? 'New lead received' : entry.activity.type === 'lead_update' ? 'Lead information updated' : entry.activity.outcome}</strong><span>{entry.activity.outcome}</span></div>
         <time>{formatDate(entry.activity.occurredAt)}</time>
         {(entry.activity.type === 'call' || entry.activity.type === 'text' || entry.activity.type === 'note' || entry.activity.type === 'email') && <div className="activity-row-actions"><button className="edit-action" onClick={() => setActivityEditor({ leadId: entry.lead.id, activityId: entry.activity.id, type: entry.activity.type as ManualActivityType, occurredAt: entry.activity.occurredAt, outcome: entry.activity.outcome })}>Edit</button><button className="delete-action" onClick={() => remove(entry.lead.id, entry.activity.id)} aria-label={`Delete ${entry.activity.type} for ${entry.lead.name}`}>Delete</button></div>}
       </article> : <article className="activity-row" key={`schedule-${entry.activity.id}`}>
@@ -869,7 +902,8 @@ function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft
   </section></div>
 }
 
-function LeadPanel({ lead, trialOpenings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onStatusChange, onDelete }: { lead: Lead; trialOpenings: TrialOpening[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDelete: (leadId: string, activityId: string) => void }) {
+function LeadPanel({ lead, instruments, trialOpenings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead }: { lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void }) {
+  const [editing, setEditing] = useState(false)
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
   const isActiveHotLead = lead.status === 'hot' && !lead.trialAt
   const recommendation = isNurture ? nextNurtureContact(lead, defaultAvailability) : nextContact(lead, defaultAvailability)
@@ -879,8 +913,9 @@ function LeadPanel({ lead, trialOpenings, onClose, onLog, onAddNote, onTextNow, 
   const messageTemplate = nurtureTemplate ?? activeTemplate
   const cadenceProgress = isNurture ? nurtureCadenceState(lead) : isActiveHotLead ? activeCadenceState(lead) : undefined
   const notes = lead.activities.filter((activity) => activity.type === 'note').reverse()
-  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer">
+  return <><div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer">
     <button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2>{lead.studentName && <p className="profile-student">Student: <strong>{lead.studentName}</strong></p>}<p className="muted">{lead.instrument} · {lead.phone}</p>
+    <button className="edit-lead-button" onClick={() => setEditing(true)}>✎ Edit lead information</button>
     <div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span>{messageTemplate && <><b>{messageTemplate.label}</b><small>{messageTemplate.message}</small></>}</div>
     {activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}
     <div className="drawer-actions"><button className="primary" onClick={() => onTextNow(lead, messageTemplate)}>↗ Text now</button>{(!messageTemplate || messageTemplate.callFirst) && <button className="secondary" disabled={cadenceProgress?.callLogged} onClick={() => onLog(lead.id, 'call')}>{cadenceProgress?.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button className="secondary" disabled={cadenceProgress?.textLogged} onClick={() => onLog(lead.id, 'text')}>{cadenceProgress?.textLogged ? '✓ Text logged' : '✓ Log text'}</button></div>
@@ -889,8 +924,9 @@ function LeadPanel({ lead, trialOpenings, onClose, onLog, onAddNote, onTextNow, 
     {notes.length > 0 && <><h3>Saved notes</h3><div className="profile-notes">{notes.map((note) => <article key={note.id}><p>{note.outcome}</p><small>{formatDate(note.occurredAt)}</small></article>)}</div></>}
     <label className="field">Status<select value={lead.status} onChange={(event) => onStatusChange(lead.id, event.target.value as LeadStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
     <div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div>
-    <h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'note' ? 'Note' : activity.type === 'status_change' ? 'Status updated' : activity.type === 'trial_update' ? 'Trial updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)}{activity.type === 'note' ? '' : ` · ${activity.outcome}`}</small>{activity.type === 'note' && <small className="timeline-note-preview" title={activity.outcome}>{activity.outcome}</small>}</span>{(activity.type === 'call' || activity.type === 'text' || activity.type === 'note') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDelete(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div>
-  </aside></div>
+    <h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'note' ? 'Note' : activity.type === 'status_change' ? 'Status updated' : activity.type === 'trial_update' ? 'Trial updated' : activity.type === 'lead_created' ? 'New lead received' : activity.type === 'lead_update' ? 'Lead information updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)}{activity.type === 'note' ? '' : ` · ${activity.outcome}`}</small>{activity.type === 'note' && <small className="timeline-note-preview" title={activity.outcome}>{activity.outcome}</small>}</span>{(activity.type === 'call' || activity.type === 'text' || activity.type === 'note') && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDeleteActivity(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div>
+    <button className="delete-lead-button" onClick={() => onDeleteLead(lead.id)}>Delete lead permanently</button>
+  </aside></div>{editing && <EditLeadModal lead={lead} instruments={instruments} onClose={() => setEditing(false)} onSave={(update) => { onUpdateLead(lead.id, update); setEditing(false) }} />}</>
 }
 
 function TrialWorkflowEditor({ lead, onTrialUpdate }: { lead: Lead; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void }) {
@@ -906,6 +942,19 @@ function LeadNoteComposer({ onSave }: { onSave: (note: string) => void }) {
 function QuickNoteModal({ lead, onClose, onSave }: { lead: Lead; onClose: () => void; onSave: (note: string) => void }) {
   const [note, setNote] = useState('')
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal quick-note" onSubmit={(event) => { event.preventDefault(); if (note.trim()) onSave(note.trim()) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Take note</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · This note will appear in the Activity Log.</p><label className="field">Note<textarea autoFocus required rows={6} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label><button className="primary full" type="submit" disabled={!note.trim()}>Save note</button></form></div>
+}
+
+function EditLeadModal({ lead, instruments, onClose, onSave }: { lead: Lead; instruments: string[]; onClose: () => void; onSave: (update: Partial<Lead>) => void }) {
+  const [name, setName] = useState(lead.name)
+  const [studentName, setStudentName] = useState(lead.studentName ?? '')
+  const [sameAsLead, setSameAsLead] = useState(Boolean(lead.studentName && lead.studentName === lead.name))
+  const [phone, setPhone] = useState(lead.phone)
+  const [email, setEmail] = useState(lead.email)
+  const [instrument, setInstrument] = useState(lead.instrument)
+  const [source, setSource] = useState(lead.source)
+  const [campaign, setCampaign] = useState(lead.campaign)
+  const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date(lead.receivedAt)))
+  return <div className="overlay modal-overlay edit-lead-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal edit-lead-modal" onSubmit={(event) => { event.preventDefault(); onSave({ name: name.trim(), studentName: (sameAsLead ? name : studentName).trim() || undefined, phone: phone.trim(), email: email.trim(), instrument, source, campaign: campaign.trim(), receivedAt: new Date(receivedAt).toISOString() }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>Edit lead information</h2><label className="field">Lead name<input required value={name} onChange={(event) => { setName(event.target.value); if (sameAsLead) setStudentName(event.target.value) }} autoFocus /></label><label className="field">Student name <small>Optional</small><input value={sameAsLead ? name : studentName} disabled={sameAsLead} onChange={(event) => setStudentName(event.target.value)} /></label><label className="same-name-check"><input type="checkbox" checked={sameAsLead} onChange={(event) => { setSameAsLead(event.target.checked); if (event.target.checked) setStudentName(name) }} /> Student name is the same as lead name</label><div className="field-pair"><label className="field">Phone<input required value={phone} onChange={(event) => setPhone(event.target.value)} /></label><label className="field">Email <small>Optional</small><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label></div><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} onChange={(event) => setReceivedAt(event.target.value)} /></label><div className="field-pair"><label className="field">Instrument<select required value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instruments.map((item) => <option key={item}>{item}</option>)}</select></label><label className="field">Source<select value={source} onChange={(event) => setSource(event.target.value)}><option>Meta</option><option>Website Traffic</option><option>WLS</option><option>Word of Mouth</option></select></label></div><label className="field">Campaign<input value={campaign} onChange={(event) => setCampaign(event.target.value)} /></label><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button className="primary" type="submit">Save changes</button></div></form></div>
 }
 
 function NewLeadModal({ instruments, onClose, onSave }: { instruments: string[]; onClose: () => void; onSave: (lead: Lead) => void }) {
