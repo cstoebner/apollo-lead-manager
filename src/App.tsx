@@ -14,14 +14,15 @@ type StartText = (lead: Lead, template?: MessageTemplate) => void
 type TextDraft = { lead: Lead; label: string; message: string }
 type ScheduleLogInput = Omit<ScheduleActivity, 'id' | 'occurredAt'>
 type ManualActivityType = Exclude<ActivityType, 'status_change' | 'trial_update'>
-type ManualActivityInput = { leadId: string; activityId?: string; type: ManualActivityType; occurredAt: string; outcome: string }
+type ManualEventType = ManualActivityType | 'trial_booked' | 'trial_form_completed' | 'trial_completed' | 'became_student' | 'unenrolled'
+type ManualActivityInput = { leadId: string; activityId?: string; type: ManualEventType; occurredAt: string; outcome: string; trialAt?: string }
 type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
 
 const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
 const statusLabels: Record<LeadStatus, string> = {
   active_student: 'Active Student', hot: 'Hot', action_pending: 'Action Pending', nurture: 'Nurture',
-  nurture_long_term: 'Nurture Long Term', unresponsive: 'Unresponsive',
+  nurture_long_term: 'Nurture Long Term', unresponsive: 'Unresponsive', unenrolled: 'Unenrolled',
 }
 
 const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
@@ -192,10 +193,21 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, activities: [...lead.activities, activity] } : lead))
     persist(saveActivity(id, activity))
   }
-  const saveManualActivity = ({ leadId, activityId, type, occurredAt, outcome }: ManualActivityInput) => {
-    const activity: Activity = { id: activityId ?? crypto.randomUUID(), type, occurredAt, outcome: outcome.trim() }
-    setLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, activities: activityId ? lead.activities.map((item) => item.id === activityId ? activity : item) : [...lead.activities, activity] } : lead))
-    persist(saveActivity(leadId, activity))
+  const saveManualActivity = ({ leadId, activityId, type, occurredAt, outcome, trialAt }: ManualActivityInput) => {
+    const activityType: ActivityType = type === 'trial_booked' || type === 'trial_form_completed' || type === 'trial_completed' ? 'trial_update'
+      : type === 'became_student' || type === 'unenrolled' ? 'status_change' : type
+    const leadUpdate: Partial<Lead> | undefined = type === 'trial_booked' ? { trialAt }
+      : type === 'trial_form_completed' ? { holdFormComplete: true }
+        : type === 'trial_completed' ? { trialAttended: true }
+          : type === 'became_student' ? { status: 'active_student', enrolledAt: occurredAt }
+            : type === 'unenrolled' ? { status: 'unenrolled' } : undefined
+    const activity: Activity = { id: activityId ?? crypto.randomUUID(), type: activityType, occurredAt, outcome: outcome.trim() }
+    setLeads((current) => current.map((lead) => lead.id === leadId ? {
+      ...lead,
+      ...leadUpdate,
+      activities: activityId ? lead.activities.map((item) => item.id === activityId ? activity : item) : [...lead.activities, activity],
+    } : lead))
+    persist(Promise.all([saveActivity(leadId, activity), ...(leadUpdate ? [updateLead(leadId, leadUpdate)] : [])]))
   }
   const logScheduleActivity = (input: ScheduleLogInput) => {
     const activity: ScheduleActivity = { ...input, id: crypto.randomUUID(), occurredAt: new Date().toISOString() }
@@ -415,16 +427,22 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
 }
 
 function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[]; initial: ManualActivityInput; onClose: () => void; onSave: (input: ManualActivityInput) => void }) {
-  const defaults: Record<ManualActivityType, string> = { call: 'Attempted call', text: 'Message sent', email: 'Email sent', note: '' }
+  const defaults: Record<ManualEventType, string> = {
+    call: 'Attempted call', text: 'Message sent', email: 'Email sent', note: '',
+    trial_booked: 'Trial lesson booked', trial_form_completed: 'Trial confirmation form completed', trial_completed: 'Trial lesson completed',
+    became_student: 'Became an active student', unenrolled: 'Student unenrolled',
+  }
   const [leadId, setLeadId] = useState(initial.leadId)
-  const [type, setType] = useState<ManualActivityType>(initial.type)
+  const [type, setType] = useState<ManualEventType>(initial.type)
   const [occurredAt, setOccurredAt] = useState(() => toDateTimeInput(new Date(initial.occurredAt)))
+  const [trialAt, setTrialAt] = useState(() => initial.trialAt ? toDateTimeInput(new Date(initial.trialAt)) : toDateTimeInput(new Date()))
   const [outcome, setOutcome] = useState(initial.outcome)
-  const changeType = (next: ManualActivityType) => {
+  const changeType = (next: ManualEventType) => {
     if (outcome === defaults[type]) setOutcome(defaults[next])
     setType(next)
   }
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal activity-editor" onSubmit={(event) => { event.preventDefault(); if (leadId && occurredAt && outcome.trim()) onSave({ leadId, activityId: initial.activityId, type, occurredAt: new Date(occurredAt).toISOString(), outcome: outcome.trim() }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">{initial.activityId ? 'Edit activity' : 'Add activity'}</p><h2>{initial.activityId ? 'Correct this event' : 'Log a past event'}</h2><label className="field">Lead<select required disabled={Boolean(initial.activityId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((lead) => <option value={lead.id} key={lead.id}>{lead.name} · {lead.instrument}</option>)}</select></label><div className="field-pair"><label className="field">Event type<select value={type} onChange={(event) => changeType(event.target.value as ManualActivityType)}><option value="call">Call</option><option value="text">Text</option><option value="email">Email</option><option value="note">Note</option></select></label><label className="field">Date and time<input required type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label></div><label className="field">Details<textarea required rows={4} value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="What happened?" /></label><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!leadId || !occurredAt || !outcome.trim()}>{initial.activityId ? 'Save changes' : 'Add event'}</button></div></form></div>
+  const trialDateRequired = type === 'trial_booked'
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal activity-editor" onSubmit={(event) => { event.preventDefault(); if (leadId && occurredAt && outcome.trim() && (!trialDateRequired || trialAt)) onSave({ leadId, activityId: initial.activityId, type, occurredAt: new Date(occurredAt).toISOString(), outcome: outcome.trim(), trialAt: trialDateRequired ? new Date(trialAt).toISOString() : undefined }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">{initial.activityId ? 'Edit activity' : 'Add activity'}</p><h2>{initial.activityId ? 'Correct this event' : 'Log a past event'}</h2><label className="field">Lead<select required disabled={Boolean(initial.activityId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((lead) => <option value={lead.id} key={lead.id}>{lead.name}{lead.studentName && lead.studentName !== lead.name ? ` / ${lead.studentName}` : ''} · {lead.instrument}</option>)}</select></label><div className="field-pair"><label className="field">Event type<select value={type} onChange={(event) => changeType(event.target.value as ManualEventType)}><option value="call">Call</option><option value="text">Text</option><option value="email">Email</option><option value="note">Note</option><option value="trial_booked">Trial lesson booked</option><option value="trial_form_completed">Trial confirmation form completed</option><option value="trial_completed">Trial lesson completed</option><option value="became_student">Became an active student</option><option value="unenrolled">Student unenrolled</option></select></label><label className="field">Event date and time<input required type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label></div>{trialDateRequired && <label className="field event-highlight">Trial lesson date and time<input required type="datetime-local" value={trialAt} onChange={(event) => setTrialAt(event.target.value)} /><small>This is the lesson time—not when it was booked.</small></label>}<label className="field">Details<textarea required rows={4} value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="What happened?" /></label><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!leadId || !occurredAt || !outcome.trim() || (trialDateRequired && !trialAt)}>{initial.activityId ? 'Save changes' : 'Add event'}</button></div></form></div>
 }
 
 function Settings({ instruments, leads, instructors, availability, entries, openings, onInstrumentsChange, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog }: {
