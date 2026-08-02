@@ -150,6 +150,16 @@ export async function removeActivity(activityId: string) {
   assertOk(error)
 }
 
+export async function removeLead(leadId: string) {
+  const db = client()
+  const scheduleResult = await db.from('schedule_entries').delete().eq('lead_id', leadId)
+  assertOk(scheduleResult.error)
+  const activityResult = await db.from('activities').delete().eq('lead_id', leadId)
+  assertOk(activityResult.error)
+  const leadResult = await db.from('leads').delete().eq('id', leadId)
+  assertOk(leadResult.error)
+}
+
 async function syncRows(table: string, rows: Record<string, unknown>[], removedIds: string[]) {
   const db = client()
   if (removedIds.length) {
