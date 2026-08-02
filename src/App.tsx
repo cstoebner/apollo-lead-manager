@@ -15,7 +15,7 @@ type ManualActivityType = Exclude<ActivityType, 'status_change' | 'trial_update'
 type ManualActivityInput = { leadId: string; activityId?: string; type: ManualActivityType; occurredAt: string; outcome: string }
 type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
 
-const instruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
+const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
 const statusLabels: Record<LeadStatus, string> = {
   active_student: 'Active Student', hot: 'Hot', nurture: 'Nurture',
@@ -72,7 +72,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Every calendar lesson type now uses the searchable lead list.</span><span>Trials are scheduled from the instructor calendar and update the lead automatically.</span><span>Instructor instruments can be edited without rebuilding their schedule.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Settings now manages offered instruments and the instructor roster.</span><span>Every calendar lesson type uses the searchable lead list.</span><span>Trials scheduled on the calendar update the lead automatically.</span></div>
       </section>
     </main>
   )
@@ -81,6 +81,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
 function Workspace() {
   const [view, setView] = useState<View>('today')
   const [leads, setLeads] = useState(demoLeads)
+  const [offeredInstruments, setOfferedInstruments] = useState(defaultInstruments)
   const [instructors, setInstructors] = useState(demoInstructors)
   const [trialOpenings, setTrialOpenings] = useState(demoTrialOpenings)
   const [instructorAvailability, setInstructorAvailability] = useState(demoInstructorAvailability)
@@ -146,28 +147,28 @@ function Workspace() {
           <NavButton active={view === 'openings'} onClick={() => setView('openings')} icon="◫" label="Instructor schedule" />
           <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
           <NavButton active={view === 'marketing'} onClick={() => setView('marketing')} icon="↗" label="Marketing" />
-          <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Availability" />
+          <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Settings" />
         </nav>
         <div className="sidebar-foot"><span className="avatar">CS</span><div>Conor<small>{isSupabaseConfigured ? 'Connected' : 'Demo mode'}</small></div></div>
       </aside>
 
       <main className="content">
         <header className="topbar">
-          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'openings' ? 'Instructor schedule' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Contact availability'}</h1></div>
+          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'openings' ? 'Instructor schedule' : view === 'activity' ? 'Activity log' : view === 'marketing' ? 'Advertising yield' : 'Settings'}</h1></div>
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
         {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onTrialUpdate={updateTrial} onStatusChange={changeStatus} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onTrialUpdate={updateTrial} />}
-        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstructorsChange={setInstructors} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
+        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={(id) => setScheduleActivities((current) => current.filter((activity) => activity.id !== id))} />}
         {view === 'marketing' && <Marketing leads={leads} />}
-        {view === 'settings' && <Settings />}
+        {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={setOfferedInstruments} onInstructorsChange={setInstructors} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} />}
       </main>
 
       {selected && <LeadPanel lead={selected} trialOpenings={trialOpenings} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onStatusChange={changeStatus} onDelete={deleteActivity} />}
-      {showNewLead && <NewLeadModal onClose={() => setShowNewLead(false)} onSave={(lead) => { setLeads((current) => [lead, ...current]); setShowNewLead(false) }} />}
+      {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={(lead) => { setLeads((current) => [lead, ...current]); setShowNewLead(false) }} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
     </div>
@@ -373,8 +374,78 @@ function Marketing({ leads }: { leads: Lead[] }) {
   return <><section className="stats-grid"><Stat value={`$${totalSpend}`} label="Tracked spend" note={`$${Math.round(totalSpend / leads.length)} per lead`} tone="coral" /><Stat value={String(leads.length)} label="Leads generated" note="Across all campaigns" tone="gold" /><Stat value={`$${Math.round(totalSpend / Math.max(1, leads.filter(l => l.status === 'active_student').length))}`} label="Cost per student" note="Based on enrollments" tone="green" /></section><section className="card"><div className="section-head"><div><h2>Performance by source</h2><p>Use this to decide where the next advertising dollar goes.</p></div></div><div className="source-list">{sources.map((item) => <div className="source-row" key={item.source}><strong>{item.source}</strong><span>{item.leads} leads</span><div className="bar"><i style={{ width: `${Math.max(10, item.leads / leads.length * 100)}%` }} /></div><span>${Math.round(item.spend / item.leads)}/lead</span><span>{item.students} students</span></div>)}</div></section></>
 }
 
-function Settings() {
-  return <section className="settings-grid"><div className="card setting-card"><h2>Weekly availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>4:30–8:00 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div><div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div></section>
+function Settings({ instruments, leads, instructors, availability, entries, openings, onInstrumentsChange, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog }: {
+  instruments: string[]
+  leads: Lead[]
+  instructors: Instructor[]
+  availability: InstructorAvailability[]
+  entries: ScheduleEntry[]
+  openings: TrialOpening[]
+  onInstrumentsChange: (value: string[]) => void
+  onInstructorsChange: (value: Instructor[]) => void
+  onAvailabilityChange: (value: InstructorAvailability[]) => void
+  onEntriesChange: (value: ScheduleEntry[]) => void
+  onOpeningsChange: (value: TrialOpening[]) => void
+  onScheduleLog: (activity: ScheduleLogInput) => void
+}) {
+  const [newInstrument, setNewInstrument] = useState('')
+  const [newInstructorName, setNewInstructorName] = useState('')
+  const [newInstructorInstruments, setNewInstructorInstruments] = useState<string[]>([])
+  const [editingInstructor, setEditingInstructor] = useState<Instructor | null>(null)
+
+  const instrumentIsUsed = (instrument: string) => leads.some((lead) => lead.instrument === instrument)
+    || instructors.some((instructor) => instructor.instruments.includes(instrument))
+    || entries.some((entry) => entry.instrument === instrument)
+    || openings.some((opening) => opening.instruments.includes(instrument))
+
+  const addInstrument = () => {
+    const name = newInstrument.trim()
+    if (!name) return
+    if (instruments.some((instrument) => instrument.toLowerCase() === name.toLowerCase())) { window.alert('That instrument is already listed.'); return }
+    onInstrumentsChange([...instruments, name]); setNewInstrument('')
+  }
+
+  const removeInstrument = (instrument: string) => {
+    if (instruments.length === 1) { window.alert('At least one offered instrument must remain.'); return }
+    if (instrumentIsUsed(instrument)) { window.alert(`${instrument} is currently attached to a lead, instructor, opening, or scheduled lesson. Update those records before removing it.`); return }
+    onInstrumentsChange(instruments.filter((item) => item !== instrument))
+  }
+
+  const addInstructor = () => {
+    const name = newInstructorName.trim()
+    if (!name) return
+    if (!newInstructorInstruments.length) { window.alert('Select at least one instrument.'); return }
+    if (instructors.some((item) => item.name.toLowerCase() === name.toLowerCase())) { window.alert('That instructor already exists.'); return }
+    const next = { id: crypto.randomUUID(), name, instruments: newInstructorInstruments }
+    onInstructorsChange([...instructors, next]); setNewInstructorName(''); setNewInstructorInstruments([])
+    onScheduleLog({ action: 'Instructor added', instructor: name, details: newInstructorInstruments.join(' / ') })
+  }
+
+  const removeInstructor = (item: Instructor) => {
+    if (instructors.length === 1) { window.alert('At least one instructor must remain.'); return }
+    if (!window.confirm(`Remove ${item.name}? Their availability, scheduled lessons, and trial openings will also be removed.`)) return
+    onInstructorsChange(instructors.filter((instructor) => instructor.id !== item.id))
+    onAvailabilityChange(availability.filter((block) => block.instructorId !== item.id))
+    onEntriesChange(entries.filter((entry) => entry.instructorId !== item.id))
+    onOpeningsChange(openings.filter((opening) => opening.instructor !== item.name))
+    onScheduleLog({ action: 'Instructor removed', instructor: item.name, details: `${item.instruments.join(' / ')} · Schedule data removed` })
+  }
+
+  const saveInstructorInstruments = (item: Instructor, nextInstruments: string[]) => {
+    if (!nextInstruments.length) { window.alert('Select at least one instrument.'); return }
+    const previous = item.instruments.join(' / ')
+    onInstructorsChange(instructors.map((instructor) => instructor.id === item.id ? { ...item, instruments: nextInstruments } : instructor))
+    onOpeningsChange(openings.map((opening) => opening.instructor === item.name ? { ...opening, instruments: nextInstruments } : opening))
+    onScheduleLog({ action: 'Instructor instruments updated', instructor: item.name, details: `${previous} → ${nextInstruments.join(' / ')}` })
+    setEditingInstructor(null)
+  }
+
+  return <><section className="settings-grid">
+    <div className="card setting-card settings-wide"><h2>Instruments offered</h2><p>This list controls the instrument choices used throughout the lead manager.</p><form className="settings-add-row" onSubmit={(event) => { event.preventDefault(); addInstrument() }}><input value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)} placeholder="Add an instrument" /><button className="primary" type="submit" disabled={!newInstrument.trim()}>＋ Add</button></form><div className="settings-item-list">{instruments.map((instrument) => { const used = instrumentIsUsed(instrument); return <span key={instrument}><b>{instrument}</b>{used && <small>In use</small>}<button disabled={used} title={used ? `${instrument} is currently in use` : `Remove ${instrument}`} onClick={() => removeInstrument(instrument)}>×</button></span> })}</div></div>
+    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}</small></div><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
+    <div className="card setting-card"><h2>Contact availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Friday</span><strong>4:30–8:00 PM</strong></div><div className="schedule-row"><span>Saturday–Sunday</span><strong>10:00 AM–4:00 PM</strong></div><div className="blackout"><strong>Recurring exceptions</strong><span>Tuesday 5:00–5:30 PM</span><span>Thursday 4:30–5:30 PM</span></div><button className="secondary">Edit availability</button></div>
+    <div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div>
+  </section>{editingInstructor && <InstructorEditor instrumentOptions={instruments} instructor={editingInstructor} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(nextInstruments) => saveInstructorInstruments(editingInstructor, nextInstruments)} />}</>
 }
 
 const scheduleDays = [
@@ -462,13 +533,12 @@ function describeScheduleEntry(entry: ScheduleEntry) {
   return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)}`
 }
 
-function InstructorSchedule({ leads, instructors, availability, entries, openings, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange }: {
+function InstructorSchedule({ leads, instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange }: {
   leads: Lead[]
   instructors: Instructor[]
   availability: InstructorAvailability[]
   entries: ScheduleEntry[]
   openings: TrialOpening[]
-  onInstructorsChange: (value: Instructor[]) => void
   onAvailabilityChange: (value: InstructorAvailability[]) => void
   onEntriesChange: (value: ScheduleEntry[]) => void
   onOpeningsChange: (value: TrialOpening[]) => void
@@ -481,9 +551,6 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const [availabilityDay, setAvailabilityDay] = useState(1)
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
   const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
-  const [newInstructorName, setNewInstructorName] = useState('')
-  const [newInstructorInstruments, setNewInstructorInstruments] = useState<string[]>([])
-  const [editingInstructor, setEditingInstructor] = useState<Instructor | null>(null)
   const [slotEditor, setSlotEditor] = useState<{ date: Date; time: string; entry?: ScheduleEntry } | null>(null)
   const weekDates = scheduleDays.map((_, index) => datePlusDays(weekStart, index))
   const instructorOpenings = openings.filter((opening) => opening.instructor === instructor.name && Date.parse(opening.startsAt) > Date.now())
@@ -514,38 +581,6 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const removeAvailability = (block: InstructorAvailability) => {
     onAvailabilityChange(availability.filter((item) => item.id !== block.id))
     onScheduleLog({ action: 'Availability removed', instructor: instructor.name, details: `${scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.label} · ${formatClock(block.startTime)}–${formatClock(block.endTime)}` })
-  }
-
-  const addInstructor = () => {
-    const name = newInstructorName.trim()
-    if (!name) return
-    if (!newInstructorInstruments.length) { window.alert('Select at least one instrument.'); return }
-    if (instructors.some((item) => item.name.toLowerCase() === name.toLowerCase())) { window.alert('That instructor already exists.'); return }
-    const next = { id: crypto.randomUUID(), name, instruments: newInstructorInstruments }
-    onInstructorsChange([...instructors, next]); setInstructorId(next.id); setNewInstructorName(''); setNewInstructorInstruments([])
-    onScheduleLog({ action: 'Instructor added', instructor: name, details: newInstructorInstruments.join(' / ') })
-  }
-
-  const removeInstructor = (item: Instructor) => {
-    if (instructors.length === 1) { window.alert('At least one instructor must remain.'); return }
-    if (!window.confirm(`Remove ${item.name}? Their availability, scheduled lessons, and trial openings will also be removed.`)) return
-    const remaining = instructors.filter((instructorItem) => instructorItem.id !== item.id)
-    onInstructorsChange(remaining)
-    onAvailabilityChange(availability.filter((block) => block.instructorId !== item.id))
-    onEntriesChange(entries.filter((entry) => entry.instructorId !== item.id))
-    onOpeningsChange(openings.filter((opening) => opening.instructor !== item.name))
-    if (instructorId === item.id) setInstructorId(remaining[0].id)
-    onScheduleLog({ action: 'Instructor removed', instructor: item.name, details: `${item.instruments.join(' / ')} · Schedule data removed` })
-  }
-
-  const saveInstructorInstruments = (item: Instructor, nextInstruments: string[]) => {
-    if (!nextInstruments.length) { window.alert('Select at least one instrument.'); return }
-    const previous = item.instruments.join(' / ')
-    const updated = { ...item, instruments: nextInstruments }
-    onInstructorsChange(instructors.map((instructorItem) => instructorItem.id === item.id ? updated : instructorItem))
-    onOpeningsChange(openings.map((opening) => opening.instructor === item.name ? { ...opening, instruments: nextInstruments } : opening))
-    onScheduleLog({ action: 'Instructor instruments updated', instructor: item.name, details: `${previous} → ${nextInstruments.join(' / ')}` })
-    setEditingInstructor(null)
   }
 
   const saveEntry = (next: ScheduleEntry) => {
@@ -640,14 +675,6 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
           <div className="availability-chips">{availability.filter((block) => block.instructorId === instructor.id).map((block) => <span key={block.id}>{scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.short} {formatClock(block.startTime)}–{formatClock(block.endTime)}<button onClick={() => removeAvailability(block)}>×</button></span>)}</div>
         </div>
 
-        <div className="card schedule-setup instructor-manager">
-          <h2>Instructors</h2><p>Add teachers or edit what they teach without affecting their schedule.</p>
-          <label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label>
-          <div className="instrument-checks">{instruments.map((item) => <label key={item}><input type="checkbox" checked={newInstructorInstruments.includes(item)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, item] : current.filter((instrument) => instrument !== item))} /> {item}</label>)}</div>
-          <button className="secondary full" onClick={addInstructor}>＋ Add instructor</button>
-          <div className="instructor-list">{instructors.map((item) => <span key={item.id}><b>{item.name}</b><small>{item.instruments.join(' / ')}</small><div className="instructor-actions"><button className="edit-instructor" title={`Edit ${item.name}'s instruments`} onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></div></span>)}</div>
-        </div>
-
         <div className="card schedule-tip"><strong>Add or edit lessons from the calendar</strong><p>Use the small <b>+</b> on an open slot to schedule a student. Click an occupied slot to edit it.</p></div>
       </aside>
 
@@ -674,11 +701,11 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     </div>
     <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
     {slotEditor && <ScheduleEntryEditor leads={leads} instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
-    {editingInstructor && <InstructorEditor instructor={editingInstructor} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(nextInstruments) => saveInstructorInstruments(editingInstructor, nextInstruments)} />}
   </section>
 }
 
-function InstructorEditor({ instructor, lockedInstruments, onClose, onSave }: {
+function InstructorEditor({ instrumentOptions, instructor, lockedInstruments, onClose, onSave }: {
+  instrumentOptions: string[]
   instructor: Instructor
   lockedInstruments: string[]
   onClose: () => void
@@ -686,7 +713,7 @@ function InstructorEditor({ instructor, lockedInstruments, onClose, onSave }: {
 }) {
   const [selected, setSelected] = useState(instructor.instruments)
   const toggle = (instrument: string, checked: boolean) => setSelected((current) => checked ? Array.from(new Set([...current, instrument])) : current.filter((item) => item !== instrument))
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal instructor-editor" onSubmit={(event) => { event.preventDefault(); onSave(selected) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Edit instructor</p><h2>{instructor.name}</h2><p className="muted">Choose every instrument this instructor can teach. Their availability and scheduled lessons will stay exactly as they are.</p><div className="instrument-checks editor-instrument-checks">{instruments.map((instrument) => {
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal instructor-editor" onSubmit={(event) => { event.preventDefault(); onSave(selected) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Edit instructor</p><h2>{instructor.name}</h2><p className="muted">Choose every instrument this instructor can teach. Their availability and scheduled lessons will stay exactly as they are.</p><div className="instrument-checks editor-instrument-checks">{instrumentOptions.map((instrument) => {
     const locked = lockedInstruments.includes(instrument)
     return <label className={locked ? 'locked-instrument' : ''} key={instrument}><input type="checkbox" checked={selected.includes(instrument)} disabled={locked} onChange={(event) => toggle(instrument, event.target.checked)} /> <span>{instrument}{locked && <small>Scheduled</small>}</span></label>
   })}</div><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!selected.length}>Save instruments</button></div></form></div>
@@ -806,13 +833,13 @@ function QuickNoteModal({ lead, onClose, onSave }: { lead: Lead; onClose: () => 
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal quick-note" onSubmit={(event) => { event.preventDefault(); if (note.trim()) onSave(note.trim()) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Take note</p><h2>{lead.name}</h2><p className="muted">{lead.instrument} · This note will appear in the Activity Log.</p><label className="field">Note<textarea autoFocus required rows={6} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label><button className="primary full" type="submit" disabled={!note.trim()}>Save note</button></form></div>
 }
 
-function NewLeadModal({ onClose, onSave }: { onClose: () => void; onSave: (lead: Lead) => void }) {
+function NewLeadModal({ instruments, onClose, onSave }: { instruments: string[]; onClose: () => void; onSave: (lead: Lead) => void }) {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [instrument, setInstrument] = useState('Piano')
+  const [instrument, setInstrument] = useState(instruments[0] ?? '')
   const [source, setSource] = useState('Meta')
   const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date()))
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'hot', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select value={instrument} onChange={(e) => setInstrument(e.target.value)}><option>Piano</option><option>Guitar</option><option>Voice</option><option>Drums</option><option>Violin</option><option>Saxophone</option><option>Trumpet</option><option>Trombone</option></select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Meta</option><option>Website Traffic</option><option>WLS</option><option>Word of Mouth</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); onSave({ id: crypto.randomUUID(), name, phone, email: '', instrument, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'hot', activities: [], holdFormComplete: false, trialAttended: false, adCost: 0 }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Name<input required value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><div className="field-pair"><label className="field">Instrument<select required value={instrument} onChange={(e) => setInstrument(e.target.value)}>{instruments.map((item) => <option key={item}>{item}</option>)}</select></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Meta</option><option>Website Traffic</option><option>WLS</option><option>Word of Mouth</option></select></label></div><button className="primary full" type="submit">Save lead</button></form></div>
 }
 
 export default App
