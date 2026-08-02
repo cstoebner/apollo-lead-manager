@@ -65,6 +65,7 @@ export interface ScheduleEntry {
   studentName: string
   instrument: string
   kind: ScheduleEntryKind
+  durationMinutes: 30 | 45 | 60
   dayOfWeek?: number
   startTime?: string
   startsAt?: string
