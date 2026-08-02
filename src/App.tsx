@@ -72,7 +72,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see exactly what your advertising produces.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Trials are now scheduled from the instructor calendar using a searchable lead list.</span><span>Instructor instruments can now be edited without rebuilding their schedule.</span><span>Completed text-only nurture steps now clear from Next Actions correctly.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Every calendar lesson type now uses the searchable lead list.</span><span>Trials are scheduled from the instructor calendar and update the lead automatically.</span><span>Instructor instruments can be edited without rebuilding their schedule.</span></div>
       </section>
     </main>
   )
@@ -714,9 +714,9 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
   const [startsAt, setStartsAt] = useState(() => toDateTimeInput(initialDate))
 
   const save = () => {
-    if (kind === 'trial' && !selectedLeadId) { window.alert('Choose a lead from the search list.'); return }
+    if (!selectedLeadId && !existing) { window.alert('Choose a student or lead from the search list.'); return }
     if (!studentName.trim()) return
-    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: kind === 'trial' ? selectedLeadId : undefined, studentName: studentName.trim(), instrument, kind }
+    const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: selectedLeadId || existing?.leadId, studentName: studentName.trim(), instrument, kind }
     onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn, skippedDates: existing?.skippedDates } : { ...base, startsAt: new Date(startsAt).toISOString() })
   }
 
@@ -725,22 +725,22 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
     <p className="eyebrow">{existing ? 'Edit scheduled lesson' : 'Add scheduled lesson'}</p>
     <h2>{existing ? existing.studentName : `${scheduleDays.find((day) => day.dayOfWeek === slot.date.getDay())?.label} at ${formatClock(slot.time)}`}</h2>
     {existing?.kind === 'regular' && <p className="editor-caution">🔒 This weekly time belongs to {existing.studentName}. Use “Open this date” for a one-week absence.</p>}
-    {kind === 'trial' ? <LeadSearchPicker leads={leads} instructor={instructor} selectedLeadId={selectedLeadId} onClear={() => { setSelectedLeadId(''); setStudentName('') }} onSelect={(lead) => { setSelectedLeadId(lead.id); setStudentName(lead.name); setInstrument(lead.instrument) }} /> : <label className="field">Student<input autoFocus required value={studentName} onChange={(event) => setStudentName(event.target.value)} placeholder="Student name" /></label>}
-    <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => { const nextKind = event.target.value as ScheduleEntryKind; setKind(nextKind); if (nextKind === 'trial' && !selectedLeadId) setStudentName('') }}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select disabled={kind === 'trial'} value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+    <LeadSearchPicker leads={leads} instructor={instructor} selectedLeadId={selectedLeadId} initialName={studentName} onClear={() => { setSelectedLeadId(''); setStudentName('') }} onSelect={(lead) => { setSelectedLeadId(lead.id); setStudentName(lead.name); setInstrument(lead.instrument) }} />
+    <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select disabled={Boolean(selectedLeadId)} value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
     {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="1800" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="1800" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
     <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}{onSkipDate && <button type="button" className="absence-button" onClick={onSkipDate}>Open this date</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
   </section></div>
 }
 
-function LeadSearchPicker({ leads, instructor, selectedLeadId, onSelect, onClear }: { leads: Lead[]; instructor: Instructor; selectedLeadId: string; onSelect: (lead: Lead) => void; onClear: () => void }) {
+function LeadSearchPicker({ leads, instructor, selectedLeadId, initialName, onSelect, onClear }: { leads: Lead[]; instructor: Instructor; selectedLeadId: string; initialName?: string; onSelect: (lead: Lead) => void; onClear: () => void }) {
   const selectedLead = leads.find((lead) => lead.id === selectedLeadId)
-  const [query, setQuery] = useState(selectedLead?.name ?? '')
+  const [query, setQuery] = useState(selectedLead?.name ?? initialName ?? '')
   const [open, setOpen] = useState(true)
   const matchingLeads = leads
     .filter((lead) => instructor.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()))
     .filter((lead) => `${lead.name} ${lead.instrument} ${statusLabels[lead.status]}`.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name))
-  return <div className="field lead-search-field"><span>Lead</span><div className="lead-search"><input autoFocus required value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); if (event.target.value !== selectedLead?.name) onClear(); setOpen(true) }} placeholder="Start typing a lead's name…" autoComplete="off" />{open && <div className="lead-search-options">{matchingLeads.map((lead) => <button type="button" className={lead.id === selectedLeadId ? 'selected' : ''} key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(lead); setQuery(lead.name); setOpen(false) }}><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></button>)}{!matchingLeads.length && <p>No leads match this instructor’s instruments and your search.</p>}</div>}</div><small>Only leads whose instrument is taught by {instructor.name} are shown.</small></div>
+  return <div className="field lead-search-field"><span>Student or lead</span><div className="lead-search"><input autoFocus required value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); if (event.target.value !== selectedLead?.name) onClear(); setOpen(true) }} placeholder="Start typing a name…" autoComplete="off" />{open && <div className="lead-search-options">{matchingLeads.map((lead) => <button type="button" className={lead.id === selectedLeadId ? 'selected' : ''} key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(lead); setQuery(lead.name); setOpen(false) }}><strong>{lead.name}</strong><small>{lead.instrument} · {statusLabels[lead.status]}</small></button>)}{!matchingLeads.length && <p>No people match this instructor’s instruments and your search.</p>}</div>}</div><small>Only people whose instrument is taught by {instructor.name} are shown.</small></div>
 }
 
 function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft: TextDraft; openings: TrialOpening[]; onClose: () => void; onManage: () => void; onSend: (message: string) => void }) {
