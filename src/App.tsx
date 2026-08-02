@@ -72,7 +72,7 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see which inquiries become students.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Today is simplified to Next Actions and manual Action Pending lists.</span><span>Financial and advertising-cost tracking has been removed.</span><span>Settings manages offered instruments and the instructor roster.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Sidebar labels and Next Actions columns now stay aligned.</span><span>Today is simplified to Next Actions and manual Action Pending lists.</span><span>Financial and advertising-cost tracking has been removed.</span></div>
       </section>
     </main>
   )
@@ -174,7 +174,7 @@ function Workspace() {
 }
 
 function NavButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: string; label: string }) {
-  return <button className={active ? 'nav-active' : ''} onClick={onClick}><span>{icon}</span>{label}</button>
+  return <button className={active ? 'nav-active' : ''} onClick={onClick}><span className="nav-icon">{icon}</span><span className="nav-label">{label}</span></button>
 }
 
 function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote }: { leads: Lead[]; trialOpenings: TrialOpening[]; onSelect: (id: string) => void; onLog: (id: string, type: ActivityType) => void; onTextNow: StartText; onTakeNote: (id: string) => void }) {
