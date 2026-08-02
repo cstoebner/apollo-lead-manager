@@ -110,7 +110,7 @@ const leadRow = (lead: Lead) => ({
   name: lead.name,
   student_name: lead.studentName ?? null,
   phone: lead.phone || null,
-  email: lead.email || null,
+  email: lead.email,
   instrument: lead.instrument,
   received_at: lead.receivedAt,
   source: lead.source,
