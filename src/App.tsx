@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, nextContact, nextNurtureContact, nurtureCadenceState } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
+import { loadWorkspaceData, removeActivity as removeStoredActivity, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveLead, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import { nurtureMessageFor } from './nurtureTemplates'
-import { isSupabaseConfigured } from './supabase'
-import type { ActivityType, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
+import { isSupabaseConfigured, supabase } from './supabase'
+import type { Activity, ActivityType, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
 type View = 'today' | 'leads' | 'trials' | 'openings' | 'activity' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean; callFirst?: boolean }
@@ -59,7 +61,49 @@ const toDateTimeInput = (date: Date) => {
 function App() {
   const [entered, setEntered] = useState(false)
   if (!entered) return <Welcome onEnter={() => setEntered(true)} />
-  return <Workspace />
+  return isSupabaseConfigured ? <AuthenticatedApp /> : <Workspace />
+}
+
+function AuthenticatedApp() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined)
+
+  useEffect(() => {
+    void supabase!.auth.getSession().then(({ data }) => setSession(data.session))
+    const { data: { subscription } } = supabase!.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
+    return () => subscription.unsubscribe()
+  }, [])
+
+  if (session === undefined) return <AppLoading message="Checking your secure session…" />
+  if (!session) return <Login />
+  return <Workspace onSignOut={() => { void supabase!.auth.signOut() }} />
+}
+
+function Login() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSubmitting(true); setError('')
+    const { error: signInError } = await supabase!.auth.signInWithPassword({ email: email.trim(), password })
+    if (signInError) setError(signInError.message)
+    setSubmitting(false)
+  }
+
+  return <main className="welcome-shell"><form className="welcome-card login-card" onSubmit={submit}>
+    <div className="brand-mark">A</div><p className="eyebrow">Apollo Music Academy</p><h1>Welcome back.</h1>
+    <p className="welcome-copy">Sign in to your private lead manager.</p>
+    <label className="field">Email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>
+    <label className="field">Password<input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+    {error && <p className="auth-error">{error}</p>}
+    <button className="primary jumbo full" disabled={submitting}>{submitting ? 'Signing in…' : 'Sign in'}</button>
+  </form></main>
+}
+
+function AppLoading({ message }: { message: string }) {
+  return <main className="app-loading"><div className="brand-mark">A</div><strong>{message}</strong></main>
 }
 
 function Welcome({ onEnter }: { onEnter: () => void }) {
@@ -72,26 +116,46 @@ function Welcome({ onEnter }: { onEnter: () => void }) {
         <p className="welcome-copy">Follow up on time, fill more trials, and see which inquiries become students.</p>
         <button className="primary jumbo" onClick={onEnter}>{isSupabaseConfigured ? 'Sign in' : 'Enter demo workspace'}</button>
         {!isSupabaseConfigured && <p className="demo-note">Demo mode uses sample leads only. Connect Supabase before using real data.</p>}
-        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Upcoming outreach is previewed below Action Pending again.</span><span>Sidebar labels and Next Actions columns now stay aligned.</span><span>Today uses a manual Action Pending list.</span></div>
+        <div className="recent-updates"><strong>Recently updated · August 1, 2026</strong><span>Secure Supabase sign-in and permanent data storage are connected.</span><span>Upcoming outreach is previewed below Action Pending.</span><span>Sidebar labels and Next Actions columns stay aligned.</span></div>
       </section>
     </main>
   )
 }
 
-function Workspace() {
+function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [view, setView] = useState<View>('today')
-  const [leads, setLeads] = useState(demoLeads)
+  const [leads, setLeads] = useState(isSupabaseConfigured ? [] : demoLeads)
   const [offeredInstruments, setOfferedInstruments] = useState(defaultInstruments)
-  const [instructors, setInstructors] = useState(demoInstructors)
-  const [trialOpenings, setTrialOpenings] = useState(demoTrialOpenings)
-  const [instructorAvailability, setInstructorAvailability] = useState(demoInstructorAvailability)
-  const [scheduleEntries, setScheduleEntries] = useState(demoScheduleEntries)
+  const [instructors, setInstructors] = useState(isSupabaseConfigured ? [] : demoInstructors)
+  const [trialOpenings, setTrialOpenings] = useState(isSupabaseConfigured ? [] : demoTrialOpenings)
+  const [instructorAvailability, setInstructorAvailability] = useState(isSupabaseConfigured ? [] : demoInstructorAvailability)
+  const [scheduleEntries, setScheduleEntries] = useState(isSupabaseConfigured ? [] : demoScheduleEntries)
   const [scheduleActivities, setScheduleActivities] = useState<ScheduleActivity[]>([])
+  const [loadingData, setLoadingData] = useState(isSupabaseConfigured)
+  const [dataError, setDataError] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [quickNoteId, setQuickNoteId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
   const selected = leads.find((lead) => lead.id === selectedId)
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    void loadWorkspaceData().then((data) => {
+      setLeads(data.leads)
+      setInstructors(data.instructors)
+      setInstructorAvailability(data.availability)
+      setScheduleEntries(data.entries)
+      setTrialOpenings(data.openings)
+      setScheduleActivities(data.scheduleActivities)
+      setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
+      setLoadingData(false)
+    }).catch((error: Error) => { setDataError(error.message); setLoadingData(false) })
+  }, [])
+
+  const persist = (work: Promise<unknown>) => {
+    if (isSupabaseConfigured) void work.catch((error: Error) => setDataError(`Your change is still visible here, but could not be saved: ${error.message}`))
+  }
 
   const startText: StartText = (lead, template) => {
     if (template?.needsTimes) {
@@ -101,40 +165,52 @@ function Workspace() {
     void openMessages(lead.phone, template?.message)
   }
 
-  const logActivity = (id: string, type: ActivityType) => setLeads((current) => current.map((lead) => lead.id === id ? {
-    ...lead,
-    activities: [...lead.activities, { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), outcome: type === 'call' ? 'Attempted call' : 'Message sent' }],
-  } : lead))
-  const changeStatus = (id: string, status: LeadStatus) => setLeads((current) => current.map((lead) => {
-    if (lead.id !== id || lead.status === status) return lead
-    return {
-      ...lead,
-      status,
-      activities: [...lead.activities, {
-        id: crypto.randomUUID(), type: 'status_change', occurredAt: new Date().toISOString(),
-        outcome: `Status changed from ${statusLabels[lead.status]} to ${statusLabels[status]}`,
-      }],
-    }
-  }))
-  const updateTrial = (id: string, update: Partial<Lead>, outcome: string) => setLeads((current) => current.map((lead) => lead.id === id ? {
-    ...lead,
-    ...update,
-    activities: [...lead.activities, { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome }],
-  } : lead))
-  const deleteActivity = (leadId: string, activityId: string) => setLeads((current) => current.map((lead) => lead.id === leadId ? {
-    ...lead,
-    activities: lead.activities.filter((activity) => activity.id !== activityId),
-  } : lead))
-  const addNote = (id: string, note: string) => setLeads((current) => current.map((lead) => lead.id === id ? {
-    ...lead,
-    activities: [...lead.activities, { id: crypto.randomUUID(), type: 'note', occurredAt: new Date().toISOString(), outcome: note.trim() }],
-  } : lead))
-  const saveManualActivity = ({ leadId, activityId, type, occurredAt, outcome }: ManualActivityInput) => setLeads((current) => current.map((lead) => {
-    if (lead.id !== leadId) return lead
-    const activity = { id: activityId ?? crypto.randomUUID(), type, occurredAt, outcome: outcome.trim() }
-    return { ...lead, activities: activityId ? lead.activities.map((item) => item.id === activityId ? activity : item) : [...lead.activities, activity] }
-  }))
-  const logScheduleActivity = (activity: ScheduleLogInput) => setScheduleActivities((current) => [...current, { ...activity, id: crypto.randomUUID(), occurredAt: new Date().toISOString() }])
+  const addLead = (lead: Lead) => { setLeads((current) => [lead, ...current]); persist(saveLead(lead)); setShowNewLead(false) }
+  const logActivity = (id: string, type: ActivityType) => {
+    const activity: Activity = { id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(), outcome: type === 'call' ? 'Attempted call' : 'Message sent' }
+    setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, activities: [...lead.activities, activity] } : lead))
+    persist(saveActivity(id, activity))
+  }
+  const changeStatus = (id: string, status: LeadStatus) => {
+    const lead = leads.find((item) => item.id === id)
+    if (!lead || lead.status === status) return
+    const activity: Activity = { id: crypto.randomUUID(), type: 'status_change', occurredAt: new Date().toISOString(), outcome: `Status changed from ${statusLabels[lead.status]} to ${statusLabels[status]}` }
+    setLeads((current) => current.map((item) => item.id === id ? { ...item, status, activities: [...item.activities, activity] } : item))
+    persist(Promise.all([updateLead(id, { status }), saveActivity(id, activity)]))
+  }
+  const updateTrial = (id: string, update: Partial<Lead>, outcome: string) => {
+    const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome }
+    setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, ...update, activities: [...lead.activities, activity] } : lead))
+    persist(Promise.all([updateLead(id, update), saveActivity(id, activity)]))
+  }
+  const deleteActivity = (leadId: string, activityId: string) => {
+    setLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, activities: lead.activities.filter((activity) => activity.id !== activityId) } : lead))
+    persist(removeStoredActivity(activityId))
+  }
+  const addNote = (id: string, note: string) => {
+    const activity: Activity = { id: crypto.randomUUID(), type: 'note', occurredAt: new Date().toISOString(), outcome: note.trim() }
+    setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, activities: [...lead.activities, activity] } : lead))
+    persist(saveActivity(id, activity))
+  }
+  const saveManualActivity = ({ leadId, activityId, type, occurredAt, outcome }: ManualActivityInput) => {
+    const activity: Activity = { id: activityId ?? crypto.randomUUID(), type, occurredAt, outcome: outcome.trim() }
+    setLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, activities: activityId ? lead.activities.map((item) => item.id === activityId ? activity : item) : [...lead.activities, activity] } : lead))
+    persist(saveActivity(leadId, activity))
+  }
+  const logScheduleActivity = (input: ScheduleLogInput) => {
+    const activity: ScheduleActivity = { ...input, id: crypto.randomUUID(), occurredAt: new Date().toISOString() }
+    setScheduleActivities((current) => [...current, activity])
+    persist(saveScheduleActivity(activity, instructors.find((item) => item.name === input.instructor)?.id))
+  }
+  const replaceInstruments = (next: string[]) => { setOfferedInstruments(next); persist(saveSettings(next)) }
+  const replaceInstructors = (next: Instructor[]) => { const previous = instructors; setInstructors(next); persist(syncInstructors(previous, next)) }
+  const replaceAvailability = (next: InstructorAvailability[]) => { const previous = instructorAvailability; setInstructorAvailability(next); persist(syncAvailability(previous, next)) }
+  const replaceEntries = (next: ScheduleEntry[]) => { const previous = scheduleEntries; setScheduleEntries(next); persist(syncEntries(previous, next)) }
+  const replaceOpenings = (next: TrialOpening[]) => { const previous = trialOpenings; setTrialOpenings(next); persist(syncOpenings(previous, next, instructors)) }
+  const deleteScheduleActivity = (id: string) => { setScheduleActivities((current) => current.filter((activity) => activity.id !== id)); persist(removeStoredScheduleActivity(id)) }
+
+  if (loadingData) return <AppLoading message="Loading your lead manager…" />
+  if (dataError && !leads.length && !instructors.length) return <main className="app-loading error-loading"><strong>We couldn’t load your data.</strong><span>{dataError}</span><button className="primary" onClick={() => window.location.reload()}>Try again</button></main>
 
   return (
     <div className="app-shell">
@@ -148,10 +224,11 @@ function Workspace() {
           <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
           <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Settings" />
         </nav>
-        <div className="sidebar-foot"><span className="avatar">CS</span><div>Conor<small>{isSupabaseConfigured ? 'Connected' : 'Demo mode'}</small></div></div>
+        <div className="sidebar-foot"><span className="avatar">CS</span><div>Conor<small>{isSupabaseConfigured ? 'Connected' : 'Demo mode'}</small></div>{onSignOut && <button className="sidebar-signout" onClick={onSignOut}>Sign out</button>}</div>
       </aside>
 
       <main className="content">
+        {dataError && <div className="data-warning"><span>{dataError}</span><button onClick={() => setDataError('')}>×</button></div>}
         <header className="topbar">
           <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'trials' ? 'Trial pipeline' : view === 'openings' ? 'Instructor schedule' : view === 'activity' ? 'Activity log' : 'Settings'}</h1></div>
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
@@ -160,13 +237,13 @@ function Workspace() {
         {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onTrialUpdate={updateTrial} />}
-        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
-        {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={(id) => setScheduleActivities((current) => current.filter((activity) => activity.id !== id))} />}
-        {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={setOfferedInstruments} onInstructorsChange={setInstructors} onAvailabilityChange={setInstructorAvailability} onEntriesChange={setScheduleEntries} onOpeningsChange={setTrialOpenings} onScheduleLog={logScheduleActivity} />}
+        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
+        {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} />}
+        {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} />}
       </main>
 
       {selected && <LeadPanel lead={selected} trialOpenings={trialOpenings} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onStatusChange={changeStatus} onDelete={deleteActivity} />}
-      {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={(lead) => { setLeads((current) => [lead, ...current]); setShowNewLead(false) }} />}
+      {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
     </div>
@@ -398,7 +475,6 @@ function Settings({ instruments, leads, instructors, availability, entries, open
   }
 
   const removeInstructor = (item: Instructor) => {
-    if (instructors.length === 1) { window.alert('At least one instructor must remain.'); return }
     if (!window.confirm(`Remove ${item.name}? Their availability, scheduled lessons, and trial openings will also be removed.`)) return
     onInstructorsChange(instructors.filter((instructor) => instructor.id !== item.id))
     onAvailabilityChange(availability.filter((block) => block.instructorId !== item.id))
@@ -521,18 +597,23 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   onScheduleLog: (activity: ScheduleLogInput) => void
   onLeadTrialChange: (id: string, update: Partial<Lead>, outcome: string) => void
 }) {
-  const [instructorId, setInstructorId] = useState(instructors[0].id)
+  const [instructorId, setInstructorId] = useState(instructors[0]?.id ?? '')
   const instructor = instructors.find((item) => item.id === instructorId) ?? instructors[0]
   const [weekStart, setWeekStart] = useState(() => startOfScheduleWeek(new Date()))
   const [availabilityDay, setAvailabilityDay] = useState(1)
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
   const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
   const [slotEditor, setSlotEditor] = useState<{ date: Date; time: string; entry?: ScheduleEntry } | null>(null)
+  useEffect(() => {
+    if (!instructors.some((item) => item.id === instructorId)) setInstructorId(instructors[0]?.id ?? '')
+  }, [instructors, instructorId])
+
+  if (!instructor) return <section className="card empty-instructors"><h2>No instructors yet</h2><p>Add your first instructor from Settings, then their schedule will appear here.</p></section>
+
   const weekDates = scheduleDays.map((_, index) => datePlusDays(weekStart, index))
   const instructorOpenings = openings.filter((opening) => opening.instructor === instructor.name && Date.parse(opening.startsAt) > Date.now())
 
   const changeInstructor = (id: string) => {
-    const next = instructors.find((item) => item.id === id) ?? instructors[0]
     setInstructorId(id); setSlotEditor(null)
   }
 
