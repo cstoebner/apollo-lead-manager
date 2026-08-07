@@ -89,6 +89,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       startsOn: row.starts_on ?? undefined,
       endsOn: row.ends_on ?? undefined,
       skippedDates: row.skipped_dates ?? undefined,
+      repeatIntervalWeeks: row.repeat_interval_weeks ?? 1,
     })),
     openings: (openingResult.data ?? []).flatMap((row) => {
       const instructor = instructorNames.get(row.instructor_id)
@@ -215,6 +216,7 @@ export async function syncEntries(previous: ScheduleEntry[], next: ScheduleEntry
     starts_on: item.startsOn ?? null,
     ends_on: item.endsOn ?? null,
     skipped_dates: item.skippedDates ?? [],
+    repeat_interval_weeks: item.repeatIntervalWeeks ?? 1,
   })), previous.filter((item) => !nextIds.has(item.id)).map((item) => item.id))
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { activeFollowUpFor } from './activeTemplates'
-import { activeCadenceState, nextContact, nextNurtureContact, nurtureCadenceState } from './cadence'
+import { activeCadenceState, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
 import { loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveLead, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import { nurtureMessageFor } from './nurtureTemplates'
@@ -248,6 +248,10 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     } : lead))
     persist(Promise.all([saveActivity(leadId, activity), ...(leadUpdate ? [updateLead(leadId, leadUpdate)] : [])]))
   }
+  const insertCadenceProgress = (leadId: string, activities: Activity[]) => {
+    setLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, activities: [...lead.activities, ...activities] } : lead))
+    persist(Promise.all(activities.map((activity) => saveActivity(leadId, activity))))
+  }
   const logScheduleActivity = (input: ScheduleLogInput) => {
     const activity: ScheduleActivity = { ...input, id: crypto.randomUUID(), occurredAt: new Date().toISOString() }
     setScheduleActivities((current) => [...current, activity])
@@ -289,7 +293,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onTrialUpdate={updateTrial} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
-        {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} />}
+        {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} />}
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} />}
       </main>
 
@@ -404,10 +408,11 @@ function Trials({ leads, onSelect, onTrialUpdate }: { leads: Lead[]; onSelect: (
   return <section className="card"><div className="section-head"><div><h2>Trial readiness</h2><p>See what must happen before and after each lesson.</p></div></div><div className="trial-grid">{trials.map((lead) => <article key={lead.id} className="trial-card"><div className="trial-date"><strong>{new Date(lead.trialAt!).getDate()}</strong><span>{new Date(lead.trialAt!).toLocaleDateString('en-US', { month: 'short' })}</span></div><div className="trial-info"><button className="trial-person" onClick={() => onSelect(lead.id)}><h3>{lead.name}</h3><p>{lead.instrument} · {formatDate(lead.trialAt!)}</p></button><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onTrialUpdate(lead.id, { holdFormComplete: event.target.checked }, event.target.checked ? 'Booking form completed' : 'Booking form marked incomplete')} /> Booking form complete</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onTrialUpdate(lead.id, { trialAttended: event.target.checked }, event.target.checked ? 'Trial marked completed' : 'Trial marked not completed')} /> Trial completed</label>{lead.trialAttended && lead.status !== 'active_student' && <span className="post-trial-pill">Post-trial · waiting to book lessons</span>}</div></article>)}</div></section>
 }
 
-function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDelete, onDeleteSchedule }: { leads: Lead[]; scheduleActivities: ScheduleActivity[]; onSelect: (id: string) => void; onSaveActivity: (input: ManualActivityInput) => void; onDelete: (leadId: string, activityId: string) => void; onDeleteSchedule: (id: string) => void }) {
+function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDelete, onDeleteSchedule, onInsertCadenceProgress }: { leads: Lead[]; scheduleActivities: ScheduleActivity[]; onSelect: (id: string) => void; onSaveActivity: (input: ManualActivityInput) => void; onDelete: (leadId: string, activityId: string) => void; onDeleteSchedule: (id: string) => void; onInsertCadenceProgress: (leadId: string, activities: Activity[]) => void }) {
   const [range, setRange] = useState<'month' | 'year'>('month')
   const [anchor, setAnchor] = useState(() => new Date())
   const [activityEditor, setActivityEditor] = useState<ManualActivityInput | null>(null)
+  const [cadenceInsertOpen, setCadenceInsertOpen] = useState(false)
   const [pendingDeletions, setPendingDeletions] = useState<{ key: string; label: string; timerId: number }[]>([])
   const allEntries = [
     ...leads.flatMap((lead) => lead.activities.map((activity) => ({ kind: 'lead' as const, lead, activity, occurredAt: activity.occurredAt }))),
@@ -470,7 +475,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
   const latestDeletion = pendingDeletions[pendingDeletions.length - 1]
 
   return <><section className="card activity-card">
-    <div className="section-head activity-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><div className="activity-controls"><button className="primary add-event-button" disabled={!leads.length} onClick={() => setActivityEditor({ leadId: leads[0]?.id ?? '', type: 'call', occurredAt: new Date().toISOString(), outcome: 'Attempted call' })}>＋ Add event</button><div className="range-toggle"><button className={range === 'month' ? 'active' : ''} onClick={() => setRange('month')}>Month</button><button className={range === 'year' ? 'active' : ''} onClick={() => setRange('year')}>Year</button></div><div className="period-switch"><button onClick={() => shiftPeriod(-1)}>←</button><strong>{periodLabel}</strong><button onClick={() => shiftPeriod(1)}>→</button></div><button className="export-button" disabled={!entries.length} onClick={exportCsv}>⇩ Export CSV</button><span className="count-pill">{entries.length} actions</span></div></div>
+    <div className="section-head activity-head"><div><h2>Activity history</h2><p>Lead communication and instructor schedule changes, newest first.</p></div><div className="activity-controls"><button className="primary add-event-button" disabled={!leads.length} onClick={() => setActivityEditor({ leadId: leads[0]?.id ?? '', type: 'call', occurredAt: new Date().toISOString(), outcome: 'Attempted call' })}>＋ Add event</button><button className="insert-cadence-button" disabled={!leads.length} onClick={() => setCadenceInsertOpen(true)}>⇥ Insert into follow-up cycle</button><div className="range-toggle"><button className={range === 'month' ? 'active' : ''} onClick={() => setRange('month')}>Month</button><button className={range === 'year' ? 'active' : ''} onClick={() => setRange('year')}>Year</button></div><div className="period-switch"><button onClick={() => shiftPeriod(-1)}>←</button><strong>{periodLabel}</strong><button onClick={() => shiftPeriod(1)}>→</button></div><button className="export-button" disabled={!entries.length} onClick={exportCsv}>⇩ Export CSV</button><span className="count-pill">{entries.length} actions</span></div></div>
     <div className="activity-list">
       {entries.map((entry) => entry.kind === 'lead' ? <article className="activity-row" key={`lead-${entry.activity.id}`}>
         <div className={`activity-icon ${entry.activity.type}`}>{entry.activity.type === 'call' ? '☎' : entry.activity.type === 'text' ? '↗' : entry.activity.type === 'email' ? '✉' : entry.activity.type === 'note' ? '✎' : entry.activity.type === 'status_change' ? '↻' : entry.activity.type === 'trial_update' ? '◇' : entry.activity.type === 'lead_created' ? '＋' : entry.activity.type === 'lead_update' ? '✎' : '•'}</div>
@@ -487,7 +492,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
       </article>)}
       {!entries.length && <div className="empty-state"><strong>No activity in {periodLabel}</strong><span>Use the arrows or switch to the yearly view.</span></div>}
     </div>
-  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}</>
+  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}{cadenceInsertOpen && <CadenceInsertModal leads={leads} onClose={() => setCadenceInsertOpen(false)} onSave={(leadId, activities) => { onInsertCadenceProgress(leadId, activities); setCadenceInsertOpen(false) }} />}</>
 }
 
 function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[]; initial: ManualActivityInput; onClose: () => void; onSave: (input: ManualActivityInput) => void }) {
@@ -507,6 +512,76 @@ function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[
   }
   const trialDateRequired = type === 'trial_booked'
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal activity-editor" onSubmit={(event) => { event.preventDefault(); if (leadId && occurredAt && outcome.trim() && (!trialDateRequired || trialAt)) onSave({ leadId, activityId: initial.activityId, type, occurredAt: new Date(occurredAt).toISOString(), outcome: outcome.trim(), trialAt: trialDateRequired ? new Date(trialAt).toISOString() : undefined }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">{initial.activityId ? 'Edit activity' : 'Add activity'}</p><h2>{initial.activityId ? 'Correct this event' : 'Log a past event'}</h2><label className="field">Lead<select required disabled={Boolean(initial.activityId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((lead) => <option value={lead.id} key={lead.id}>{lead.name}{lead.studentName && lead.studentName !== lead.name ? ` / ${lead.studentName}` : ''} · {lead.instrument}</option>)}</select></label><div className="field-pair"><label className="field">Event type<select value={type} onChange={(event) => changeType(event.target.value as ManualEventType)}><option value="call">Call</option><option value="text">Text</option><option value="email">Email</option><option value="note">Note</option><option value="trial_booked">Trial lesson booked</option><option value="trial_form_completed">Trial confirmation form completed</option><option value="trial_completed">Trial lesson completed</option><option value="became_student">Became an active student</option><option value="unenrolled">Student unenrolled</option></select></label><label className="field">Event date and time<input required type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label></div>{trialDateRequired && <label className="field event-highlight">Trial lesson date and time<input required type="datetime-local" value={trialAt} onChange={(event) => setTrialAt(event.target.value)} /><small>This is the lesson time—not when it was booked.</small></label>}<label className="field">Details<textarea required rows={4} value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="What happened?" /></label><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!leadId || !occurredAt || !outcome.trim() || (trialDateRequired && !trialAt)}>{initial.activityId ? 'Save changes' : 'Add event'}</button></div></form></div>
+}
+
+const ACTIVE_CADENCE_STEPS = [
+  { label: 'Step 1 · Initial contact', detail: 'Day 0 — call and text', needsCall: true },
+  { label: 'Step 2 · First follow-up', detail: 'Day 2 — text', needsCall: false },
+  { label: 'Step 3 · Second follow-up', detail: 'Day 5 — text', needsCall: false },
+  { label: 'Step 4 · Final follow-up', detail: 'Day 8 — text', needsCall: false },
+]
+
+function CadenceInsertModal({ leads, onClose, onSave }: { leads: Lead[]; onClose: () => void; onSave: (leadId: string, activities: Activity[]) => void }) {
+  const eligibleLeads = leads.filter((item) => item.status === 'hot' || item.status === 'action_pending' || item.status === 'nurture' || item.status === 'nurture_long_term')
+  const [leadId, setLeadId] = useState(eligibleLeads[0]?.id ?? leads[0]?.id ?? '')
+  const lead = leads.find((item) => item.id === leadId)
+  const isNurture = lead?.status === 'nurture' || lead?.status === 'nurture_long_term'
+  const isActiveEligible = lead?.status === 'hot' || lead?.status === 'action_pending'
+  const [stepDates, setStepDates] = useState<string[]>(['', '', '', ''])
+  const [nurtureDate, setNurtureDate] = useState('')
+
+  const setStep = (index: number, value: string) => setStepDates((current) => {
+    const next = [...current]
+    next[index] = value
+    if (!value) for (let i = index + 1; i < next.length; i += 1) next[i] = ''
+    return next
+  })
+
+  const filledCount = stepDates.filter(Boolean).length
+  const contiguous = stepDates.every((value, index) => Boolean(value) === (index < filledCount))
+
+  const save = () => {
+    if (!lead) return
+    if (isNurture) {
+      if (!nurtureDate) return
+      const date = new Date(`${nurtureDate}T12:00:00`)
+      const activities: Activity[] = []
+      if (nurtureRequiresCall(lead, date)) activities.push({ id: crypto.randomUUID(), type: 'call', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Attempted call (backfilled)' })
+      activities.push({ id: crypto.randomUUID(), type: 'text', occurredAt: date.toISOString(), outcome: 'Message sent (backfilled)' })
+      onSave(lead.id, activities)
+      return
+    }
+    if (!filledCount || !contiguous) return
+    const activities: Activity[] = []
+    stepDates.forEach((value, index) => {
+      if (!value) return
+      const date = new Date(`${value}T12:00:00`)
+      if (ACTIVE_CADENCE_STEPS[index].needsCall) activities.push({ id: crypto.randomUUID(), type: 'call', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Attempted call (backfilled)' })
+      activities.push({ id: crypto.randomUUID(), type: 'text', occurredAt: date.toISOString(), outcome: 'Message sent (backfilled)' })
+    })
+    onSave(lead.id, activities)
+  }
+
+  const canSave = Boolean(lead) && (isNurture ? Boolean(nurtureDate) : isActiveEligible && filledCount > 0 && contiguous)
+
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal cadence-insert-modal">
+    <button type="button" className="close" onClick={onClose}>×</button>
+    <p className="eyebrow">Insert into follow-up cycle</p>
+    <h2>Backfill past outreach steps</h2>
+    <p className="muted">For a lead who was already partway through their follow-up cadence before it was tracked here. This creates the call/text history needed so future reminders land on the right day — meant for a lead with no outreach logged here yet.</p>
+    <label className="field">Lead<select value={leadId} onChange={(event) => { setLeadId(event.target.value); setStepDates(['', '', '', '']); setNurtureDate('') }}><option value="">Choose a lead</option>{leads.map((item) => <option value={item.id} key={item.id}>{item.name}{item.studentName && item.studentName !== item.name ? ` / ${item.studentName}` : ''} · {statusLabels[item.status]}</option>)}</select></label>
+    {!lead ? null : isNurture ? <>
+      <p className="muted">Nurture check-ins repeat every two weeks indefinitely, so only the most recent one matters for scheduling the next. Enter that date — whether a call was needed that day is figured out automatically.</p>
+      <label className="field">Most recent completed check-in<input type="date" value={nurtureDate} min={localDateKey(nurtureStartedAt(lead))} max={localDateKey(new Date())} onChange={(event) => setNurtureDate(event.target.value)} /></label>
+    </> : isActiveEligible ? <div className="cadence-steps">{ACTIVE_CADENCE_STEPS.map((step, index) => {
+      const disabled = index > filledCount
+      return <div className={`cadence-step${disabled ? ' step-disabled' : ''}`} key={step.label}>
+        <div><strong>{step.label}</strong><small>{step.detail}{disabled ? ' · Fill the previous step first' : ''}</small></div>
+        <input type="date" disabled={disabled} value={stepDates[index]} max={localDateKey(new Date())} onChange={(event) => setStep(index, event.target.value)} />
+      </div>
+    })}</div> : <p className="picker-warning"><strong>{lead.name} isn't in an active outreach or nurture cadence right now.</strong><span>Their status is {statusLabels[lead.status]}, so backfilling steps wouldn't change anything for them.</span></p>}
+    <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={!canSave} onClick={save}>Add to activity log</button></div>
+  </section></div>
 }
 
 function Settings({ instruments, leads, instructors, availability, entries, openings, onInstrumentsChange, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog }: {
@@ -616,6 +691,23 @@ function lessonFitsAvailability(availability: InstructorAvailability[], instruct
   return availability.some((block) => block.instructorId === instructorId && block.dayOfWeek === dayOfWeek && start >= timeMinutes(block.startTime) && end <= timeMinutes(block.endTime))
 }
 
+const EPOCH_MONDAY = new Date(2024, 0, 1)
+const weekIndexSince = (date: Date) => Math.round((startOfScheduleWeek(date).getTime() - EPOCH_MONDAY.getTime()) / (7 * 86_400_000))
+
+function onRecurrencePhase(entry: ScheduleEntry, date: Date) {
+  if ((entry.repeatIntervalWeeks ?? 1) !== 2 || !entry.startsOn) return true
+  const startWeek = weekIndexSince(new Date(`${entry.startsOn}T00:00:00`))
+  const thisWeek = weekIndexSince(date)
+  return ((thisWeek - startWeek) % 2 + 2) % 2 === 0
+}
+
+function biweeklyPhasesMatch(a: ScheduleEntry, b: ScheduleEntry) {
+  if (!a.startsOn || !b.startsOn) return true
+  const weekA = weekIndexSince(new Date(`${a.startsOn}T00:00:00`))
+  const weekB = weekIndexSince(new Date(`${b.startsOn}T00:00:00`))
+  return ((weekA - weekB) % 2 + 2) % 2 === 0
+}
+
 function entryOccursOnDate(entry: ScheduleEntry, date: Date) {
   if (entry.kind === 'regular') {
     const key = localDateKey(date)
@@ -623,6 +715,7 @@ function entryOccursOnDate(entry: ScheduleEntry, date: Date) {
       && (!entry.startsOn || key >= entry.startsOn)
       && (!entry.endsOn || key <= entry.endsOn)
       && !entry.skippedDates?.includes(key)
+      && onRecurrencePhase(entry, date)
   }
   return Boolean(entry.startsAt && localDateKey(new Date(entry.startsAt)) === localDateKey(date))
 }
@@ -690,8 +783,35 @@ function UpcomingSlotNotes({ entries, onEdit }: { entries: ScheduleEntry[]; onEd
 }
 
 function describeScheduleEntry(entry: ScheduleEntry) {
-  if (entry.kind === 'regular') return `${entry.instrument} · Every ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)} · ${entry.durationMinutes ?? 30} minutes · Starting ${new Date(`${entry.startsOn}T00:00:00`).toLocaleDateString('en-US')}`
+  if (entry.kind === 'regular') return `${entry.instrument} · ${entry.repeatIntervalWeeks === 2 ? 'Every other' : 'Every'} ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)} · ${entry.durationMinutes ?? 30} minutes · Starting ${new Date(`${entry.startsOn}T00:00:00`).toLocaleDateString('en-US')}`
   return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)} · ${entry.durationMinutes ?? 30} minutes`
+}
+
+function upcomingEntryCoversSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  const slot = timeMinutes(time)
+  return entries.filter((entry) => {
+    if (entry.instructorId !== instructorId) return false
+    if (entry.kind === 'regular') {
+      if (!entry.startsOn || entry.dayOfWeek !== date.getDay()) return false
+      const start = timeMinutes(entry.startTime!)
+      const duration = entry.durationMinutes ?? 30
+      if (slot < start || slot >= start + duration) return false
+      const referenceSlot = dateAtTime(date, entry.startTime!)
+      const cutoff = datePlusDays(referenceSlot, 42)
+      const begins = new Date(`${entry.startsOn}T${entry.startTime}:00`)
+      return begins > referenceSlot && begins <= cutoff
+    }
+    if (!entry.startsAt) return false
+    const startsAt = new Date(entry.startsAt)
+    if (startsAt.getDay() !== date.getDay()) return false
+    const start = startsAt.getHours() * 60 + startsAt.getMinutes()
+    const duration = entry.durationMinutes ?? 30
+    if (slot < start || slot >= start + duration) return false
+    const entryTime = `${String(startsAt.getHours()).padStart(2, '0')}:${String(startsAt.getMinutes()).padStart(2, '0')}`
+    const referenceSlot = dateAtTime(date, entryTime)
+    const cutoff = datePlusDays(referenceSlot, 42)
+    return startsAt > referenceSlot && startsAt <= cutoff
+  })
 }
 
 function InstructorSchedule({ leads, instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange }: {
@@ -713,6 +833,8 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
   const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
   const [slotEditor, setSlotEditor] = useState<{ date: Date; time: string; entry?: ScheduleEntry } | null>(null)
+  const [removeChoice, setRemoveChoice] = useState<ScheduleEntry | null>(null)
+  const [hoveredTime, setHoveredTime] = useState<string | null>(null)
   useEffect(() => {
     if (!instructors.some((item) => item.id === instructorId)) setInstructorId(instructors[0]?.id ?? '')
   }, [instructors, instructorId])
@@ -766,13 +888,34 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
         && entry.dayOfWeek === next.dayOfWeek
         && timesOverlap(entry.startTime!, entry.durationMinutes ?? 30, next.startTime!, next.durationMinutes ?? 30)
         && (entry.startsOn ?? '0000-00-00') <= nextEnd
-        && nextStart <= (entry.endsOn ?? '9999-12-31'))
+        && nextStart <= (entry.endsOn ?? '9999-12-31')
+        && ((entry.repeatIntervalWeeks ?? 1) === 1 || (next.repeatIntervalWeeks ?? 1) === 1 || biweeklyPhasesMatch(entry, next)))
       if (recurringConflict) { window.alert('Another regular student already owns this weekly time. Open a specific absence date, then add a trial or one-time lesson there.'); return }
     }
     const conflictingEntry = entries.filter((entry) => entry.id !== next.id).find((entry) => entry.instructorId === instructor.id
       && entryOccursOnDate(entry, date)
       && timesOverlap(entryStartTime(entry), entry.durationMinutes ?? 30, time, next.durationMinutes ?? 30))
     if (conflictingEntry) { window.alert(`That lesson overlaps ${conflictingEntry.studentName}'s scheduled time.`); return }
+    const duration = next.durationMinutes ?? 30
+    const proposedStart = timeMinutes(time)
+    const proposedEnd = proposedStart + duration
+    const sameDayIntervals: [number, number][] = entries
+      .filter((entry) => entry.id !== next.id && entry.instructorId === instructor.id && entryOccursOnDate(entry, date))
+      .map((entry) => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
+    sameDayIntervals.push([proposedStart, proposedEnd])
+    sameDayIntervals.sort((a, b) => a[0] - b[0])
+    const mergedIntervals: [number, number][] = []
+    for (const [start, end] of sameDayIntervals) {
+      const last = mergedIntervals[mergedIntervals.length - 1]
+      if (last && start - last[1] < 15) last[1] = Math.max(last[1], end)
+      else mergedIntervals.push([start, end])
+    }
+    const block = mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
+    const blockMinutes = block ? block[1] - block[0] : duration
+    if (blockMinutes > 225) {
+      const hours = (blockMinutes / 60).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+      if (!window.confirm(`This gives ${instructor.name} ${hours} consecutive hours with no break of 15+ minutes on ${date.toLocaleDateString('en-US')}. A break is recommended after 3.75 hours. Schedule anyway?`)) return
+    }
     onEntriesChange(entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next])
     onOpeningsChange(openings.filter((opening) => {
       if (opening.instructor !== instructor.name) return true
@@ -799,12 +942,20 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     setSlotEditor(null)
   }
 
-  const removeEntry = (entry: ScheduleEntry) => {
-    if (!window.confirm(`Remove ${entry.studentName} from the schedule?`)) return
+  const removeEntireSeries = (entry: ScheduleEntry) => {
     onEntriesChange(entries.filter((item) => item.id !== entry.id))
     onScheduleLog({ action: 'Scheduled lesson removed', instructor: instructor.name, studentName: entry.studentName, details: describeScheduleEntry(entry) })
     if (entry.kind === 'trial' && entry.leadId) onLeadTrialChange(entry.leadId, { trialAt: undefined, holdFormComplete: false, trialAttended: false }, 'Trial removed from instructor schedule')
-    setSlotEditor(null)
+    setRemoveChoice(null); setSlotEditor(null)
+  }
+
+  const endSeriesFromDate = (entry: ScheduleEntry, fromDate: Date) => {
+    const cutoffKey = localDateKey(datePlusDays(fromDate, -1))
+    if (entry.startsOn && cutoffKey < entry.startsOn) { removeEntireSeries(entry); return }
+    const next = { ...entry, endsOn: cutoffKey }
+    onEntriesChange(entries.map((item) => item.id === entry.id ? next : item))
+    onScheduleLog({ action: 'Recurring lesson ended', instructor: instructor.name, studentName: entry.studentName, details: `${describeScheduleEntry(entry)} · ends after ${new Date(`${cutoffKey}T00:00:00`).toLocaleDateString('en-US')}` })
+    setRemoveChoice(null); setSlotEditor(null)
   }
 
   const skipRegularDate = (entry: ScheduleEntry, date: Date) => {
@@ -850,7 +1001,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       <div className="card schedule-board">
         <div className="schedule-grid">
           <div className="schedule-corner">Time</div>{weekDates.map((date, index) => <div className="schedule-day" key={date.toISOString()}><strong>{scheduleDays[index].short}</strong><small>{date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}</small></div>)}
-          {scheduleTimes.flatMap((time) => [<div className="schedule-time" key={`time-${time}`}>{formatClock(time)}</div>, ...weekDates.map((date) => {
+          {scheduleTimes.flatMap((time) => [<div className={time === hoveredTime ? 'schedule-time time-highlighted' : 'schedule-time'} key={`time-${time}`}>{formatClock(time)}</div>, ...weekDates.map((date) => {
             const available = slotIsAvailable(availability, instructor.id, date.getDay(), time)
             const entry = entryOccupyingSlot(entries, instructor.id, date, time)
             const entryStartsHere = entry ? entryAtSlot(entries, instructor.id, date, time)?.id === entry.id : false
@@ -858,19 +1009,21 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
             const startsAt = dateAtTime(date, time)
             const opening = openings.find((item) => item.instructor === instructor.name && new Date(item.startsAt).getTime() === startsAt.getTime())
             const upcoming = upcomingEntriesAtSlot(entries, instructor.id, date, time)
+            const upcomingContinuation = entry ? [] : upcomingEntryCoversSlot(entries, instructor.id, date, time).filter((item) => !upcoming.includes(item))
             const past = startsAt < new Date()
-            const className = entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'
-            return <div className={className} key={`${localDateKey(date)}-${time}`}>
-              {entry ? <><button type="button" className="cell-main" aria-label={`Edit ${entry.studentName}`} onClick={() => setSlotEditor({ date, time: entryStartTime(entry), entry })}>{entryStartsHere && <><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : 'One-time'} · {entry.durationMinutes ?? 30} min</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
-                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
-                  : <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}
+            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
+            return <div className={className} key={`${localDateKey(date)}-${time}`} onMouseEnter={() => setHoveredTime(time)} onMouseLeave={() => setHoveredTime((current) => current === time ? null : current)}>
+              {entry ? <><button type="button" className="cell-main" aria-label={`Edit ${entry.studentName}`} onClick={() => setSlotEditor({ date, time: entryStartTime(entry), entry })}>{entryStartsHere && <><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : 'One-time'} · {entry.durationMinutes ?? 30} min{entry.kind === 'regular' && entry.repeatIntervalWeeks === 2 ? ' · Biweekly' : ''}</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
+                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">Reserved soon · {upcomingContinuation[0].studentName}</small>}{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
+                  : <>{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">Reserved soon · {upcomingContinuation[0].studentName}</small>}<UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>}
             </div>
           })])}
         </div>
       </div>
     </div>
     <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
-    {slotEditor && <ScheduleEntryEditor leads={leads} instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => removeEntry(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
+    {slotEditor && <ScheduleEntryEditor leads={leads} instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => setRemoveChoice(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
+    {removeChoice && slotEditor && <RemoveEntryDialog entry={removeChoice} slotDate={slotEditor.date} onCancel={() => setRemoveChoice(null)} onRemoveAll={() => removeEntireSeries(removeChoice)} onRemoveForward={removeChoice.kind === 'regular' ? () => endSeriesFromDate(removeChoice, slotEditor.date) : undefined} />}
   </section>
 }
 
@@ -910,12 +1063,13 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
   const [time, setTime] = useState(existing?.startTime ?? slot.time)
   const [startsOn, setStartsOn] = useState(existing?.startsOn ?? localDateKey(slot.date))
   const [startsAt, setStartsAt] = useState(() => toDateTimeInput(initialDate))
+  const [repeatIntervalWeeks, setRepeatIntervalWeeks] = useState<1 | 2>(existing?.repeatIntervalWeeks ?? 1)
 
   const save = () => {
     if (!selectedLeadId && !existing) { window.alert('Choose a student or lead from the search list.'); return }
     if (!studentName.trim()) return
     const base = { id: existing?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: selectedLeadId || existing?.leadId, studentName: studentName.trim(), instrument, kind, durationMinutes }
-    onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn, skippedDates: existing?.skippedDates } : { ...base, startsAt: new Date(startsAt).toISOString() })
+    onSave(kind === 'regular' ? { ...base, dayOfWeek, startTime: time, startsOn, endsOn: existing?.endsOn, skippedDates: existing?.skippedDates, repeatIntervalWeeks } : { ...base, startsAt: new Date(startsAt).toISOString() })
   }
 
   return <div className="overlay modal-overlay schedule-editor-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal schedule-editor">
@@ -926,8 +1080,29 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
     <LeadSearchPicker leads={leads} instructor={instructor} selectedLeadId={selectedLeadId} initialName={studentName} onClear={() => { setSelectedLeadId(''); setStudentName('') }} onSelect={(lead) => { setSelectedLeadId(lead.id); setStudentName(lead.studentName ?? lead.name); setInstrument(lead.instrument) }} />
     <div className="field-pair"><label className="field">Type<select disabled={existing?.kind === 'regular'} value={kind} onChange={(event) => setKind(event.target.value as ScheduleEntryKind)}><option value="regular">Regular student</option><option value="trial">Trial</option><option value="one_time">One-time lesson</option></select></label><label className="field">Instrument<select disabled={Boolean(selectedLeadId)} value={instrument} onChange={(event) => setInstrument(event.target.value)}>{instructor.instruments.map((item) => <option key={item}>{item}</option>)}</select></label></div>
     <label className="field">Lesson length<select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value) as 30 | 45 | 60)}><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></label>
-    {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="900" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="900" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
+    {kind === 'regular' ? <><div className="field-pair"><label className="field">Day<select value={dayOfWeek} onChange={(event) => setDayOfWeek(Number(event.target.value))}>{scheduleDays.map((day) => <option value={day.dayOfWeek} key={day.dayOfWeek}>{day.label}</option>)}</select></label><label className="field">Time<input type="time" step="900" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label className="field">Repeats<select value={repeatIntervalWeeks} onChange={(event) => setRepeatIntervalWeeks(Number(event.target.value) as 1 | 2)}><option value={1}>Every week</option><option value={2}>Every other week</option></select></label><label className="field">Starts on<input required type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} /><small>The recurring lesson will not occupy earlier weeks. For a biweekly lesson, this date sets which week it lands on.</small></label></> : <label className="field">Date and time<input type="datetime-local" step="900" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label>}
     <div className="editor-actions">{onDelete && <button type="button" className="danger-button" onClick={onDelete}>Remove from schedule</button>}{onSkipDate && <button type="button" className="absence-button" onClick={onSkipDate}>Open this date</button>}<button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" onClick={save}>{existing ? 'Save changes' : 'Add lesson'}</button></div>
+  </section></div>
+}
+
+function RemoveEntryDialog({ entry, slotDate, onCancel, onRemoveAll, onRemoveForward }: {
+  entry: ScheduleEntry
+  slotDate: Date
+  onCancel: () => void
+  onRemoveAll: () => void
+  onRemoveForward?: () => void
+}) {
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}><section className="modal remove-entry-dialog">
+    <button type="button" className="close" onClick={onCancel}>×</button>
+    <p className="eyebrow">Remove lesson</p>
+    <h2>{entry.studentName}</h2>
+    {onRemoveForward ? <>
+      <p className="muted">This is a recurring lesson. Remove it entirely, or only from {slotDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} forward?</p>
+      <div className="editor-actions remove-choice-actions"><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button type="button" className="danger-button" onClick={onRemoveForward}>Remove from {slotDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} forward</button><button type="button" className="danger-button" onClick={onRemoveAll}>Remove entire schedule</button></div>
+    </> : <>
+      <p className="muted">Remove this lesson from the schedule?</p>
+      <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button type="button" className="danger-button" onClick={onRemoveAll}>Remove from schedule</button></div>
+    </>}
   </section></div>
 }
 
