@@ -20,14 +20,14 @@ export function activeFollowUpFor(lead: Lead) {
   if (textCount === 1) return {
     label: 'Day 2 · Text 2',
     message: `Hi ${name},\n\nJust following up about ${instrument} lessons. Would a weekday afternoon/evening or Saturday generally work better for a free trial?\n\nOnce I know which is easier, I can send you two options.`,
-    callFirst: false,
+    callFirst: true,
     needsTimes: false,
   }
 
   if (textCount === 2) return {
     label: 'Day 5 · Text 3',
     message: `Hi ${name},\n\nI wanted to try you again about the free trial lesson. I currently have:\n\n1️⃣ [Day/Time 1]\n2️⃣ [Day/Time 2]\n\nWould either work? If not, send me the days or times that are usually best and I’ll see what I can find.`,
-    callFirst: false,
+    callFirst: true,
     needsTimes: true,
   }
 
@@ -36,7 +36,7 @@ export function activeFollowUpFor(lead: Lead) {
     voicemailLabel: 'Day 8 optional final voicemail',
     voicemail: `Hi ${name},\n\nThis is Conor with Apollo Music Academy. I wanted to make one more direct check-in about your request for ${instrument} lessons. I’ll send you a quick text so you can let me know where things stand whenever it’s convenient. Thanks!`,
     message: `Hi ${name},\n\nI wanted to close the loop on your request about music lessons. Just reply with the number that fits best:\n\n1️⃣ I’d like to schedule a free trial\n2️⃣ I’m interested, but the timing isn’t right\n3️⃣ I’m no longer interested\n4️⃣ I have a question\n\nIf I don’t hear back, no problem—I’ll stop checking in as frequently, but I may occasionally let you know when relevant lesson openings become available.`,
-    callFirst: false,
+    callFirst: true,
     needsTimes: false,
   }
 }

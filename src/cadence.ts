@@ -15,7 +15,7 @@ type OutreachProgress = {
   partialAt?: number
 }
 
-const activeCallRequired = [true, false, false, false]
+const activeCallRequired = [true, true, true, true]
 
 export function activeCadenceState(lead: Lead): OutreachProgress {
   const events = lead.activities
@@ -137,14 +137,7 @@ function setTime(date: Date, time: string) {
   return date
 }
 
-function isInsideBlackout(date: Date, blackout: [string, string]) {
-  const minutes = date.getHours() * 60 + date.getMinutes()
-  const [startHour, startMinute] = blackout[0].split(':').map(Number)
-  const [endHour, endMinute] = blackout[1].split(':').map(Number)
-  return minutes >= startHour * 60 + startMinute && minutes < endHour * 60 + endMinute
-}
-
-function findAvailableTime(date: Date, availability: Availability) {
+function findAvailableTime(date: Date, availability: Availability, allowHotOnly: boolean) {
   const candidate = new Date(date)
   for (let attempts = 0; attempts < 14; attempts += 1) {
     const holidays = majorHolidays(candidate.getFullYear())
@@ -153,30 +146,20 @@ function findAvailableTime(date: Date, availability: Availability) {
       continue
     }
 
-    const day = candidate.getDay()
-    if (day === 0 || day === 6) {
-      const start = setTime(new Date(candidate), availability.weekendStart)
-      const end = setTime(new Date(candidate), availability.weekendEnd)
-      if (candidate < start) return start
-      if (candidate <= end) return candidate
+    const window = availability[candidate.getDay()]
+    if (!window || (window.hotOnly && !allowHotOnly)) {
       candidate.setDate(candidate.getDate() + 1)
       setTime(candidate, '00:00')
       continue
     }
 
-    const start = setTime(new Date(candidate), availability.weekdayStart)
-    const end = setTime(new Date(candidate), availability.weekdayEnd)
-    let available = candidate < start ? start : new Date(candidate)
+    const start = setTime(new Date(candidate), window.start)
+    const end = setTime(new Date(candidate), window.end)
+    const available = candidate < start ? start : new Date(candidate)
     if (available > end) {
       candidate.setDate(candidate.getDate() + 1)
       setTime(candidate, '00:00')
       continue
-    }
-    if (day === 2 && isInsideBlackout(available, availability.tuesdayBlackout)) {
-      available = setTime(available, availability.tuesdayBlackout[1])
-    }
-    if (day === 4 && isInsideBlackout(available, availability.thursdayBlackout)) {
-      available = setTime(available, availability.thursdayBlackout[1])
     }
     return available
   }
@@ -201,7 +184,7 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
   if (baseline < now) baseline.setTime(now.getTime())
 
   return {
-    at: findAvailableTime(baseline, availability),
+    at: findAvailableTime(baseline, availability, true),
     reason: stage >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`,
     complete: false,
   }
@@ -218,11 +201,10 @@ export function nextNurtureContact(lead: Lead, availability: Availability, now =
   const anchor = progress.lastCompletedAt ?? nurtureStartedAt(lead).getTime()
   let target = new Date(anchor + intervalDays * DAY)
   if (target < now) target = new Date(now)
-  if (target.getDay() === 6) target.setDate(target.getDate() + 2)
-  if (target.getDay() === 0) target.setDate(target.getDate() + 1)
+  if (target.getDay() === 0) target.setDate(target.getDate() + 1) // Sunday's window is hot-leads only
 
   return {
-    at: findAvailableTime(target, availability),
+    at: findAvailableTime(target, availability, false),
     channel: 'call' as const,
     reason: lead.status === 'nurture_long_term' ? '2-week long-term nurture' : '2-week nurture',
   }

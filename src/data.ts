@@ -7,14 +7,16 @@ const daysFromNow = (days: number, hour: number) => {
   return date.toISOString()
 }
 
-export const defaultAvailability: Availability = {
-  weekdayStart: '16:30',
-  weekdayEnd: '20:00',
-  weekendStart: '10:00',
-  weekendEnd: '16:00',
-  tuesdayBlackout: ['17:00', '17:30'],
-  thursdayBlackout: ['16:30', '17:30'],
-}
+// Indexed by Date.getDay(): 0 = Sunday … 6 = Saturday
+export const defaultAvailability: Availability = [
+  { start: '13:00', end: '15:00', hotOnly: true }, // Sunday — hot leads only, nurture waits
+  { start: '16:30', end: '17:30' }, // Monday
+  { start: '16:30', end: '17:30' }, // Tuesday
+  { start: '16:30', end: '17:30' }, // Wednesday
+  { start: '16:30', end: '17:30' }, // Thursday
+  { start: '16:00', end: '17:15' }, // Friday
+  { start: '10:00', end: '12:00' }, // Saturday
+]
 
 export const demoTrialOpenings: TrialOpening[] = []
 

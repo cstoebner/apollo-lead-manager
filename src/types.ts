@@ -26,14 +26,13 @@ export interface Lead {
   enrolledAt?: string
 }
 
-export interface Availability {
-  weekdayStart: string
-  weekdayEnd: string
-  weekendStart: string
-  weekendEnd: string
-  tuesdayBlackout: [string, string]
-  thursdayBlackout: [string, string]
+export interface DayWindow {
+  start: string
+  end: string
+  hotOnly?: boolean
 }
+
+export type Availability = DayWindow[]
 
 export interface TrialOpening {
   id: string
