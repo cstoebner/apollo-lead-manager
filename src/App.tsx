@@ -383,8 +383,9 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => persist(saveActivity(lead.id, activity)),
     )
   }
-  const resolveSecondTrial = (lead: Lead, occurredAtInput: string) => {
+  const resolveSecondTrial = (lead: Lead, instructorId: string, occurredAtInput: string) => {
     const iso = new Date(occurredAtInput).toISOString()
+    if (!bookTrialOnSchedule(lead, instructorId, iso)) return
     const leadUpdate: Partial<Lead> = { trialAt: iso, holdFormComplete: false, trialAttended: false }
     const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome: `Second trial lesson scheduled for ${formatTrialTime(iso)}` }
     const previousLead = lead
@@ -427,6 +428,18 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const replaceEntries = (next: ScheduleEntry[]) => { const previous = scheduleEntries; setScheduleEntries(next); persist(syncEntries(previous, next)) }
   const replaceOpenings = (next: TrialOpening[]) => { const previous = trialOpenings; setTrialOpenings(next); persist(syncOpenings(previous, next, instructors)) }
   const deleteScheduleActivity = (id: string) => { setScheduleActivities((current) => current.filter((activity) => activity.id !== id)); persist(removeStoredScheduleActivity(id)) }
+  const bookTrialOnSchedule = (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes: 30 | 45 | 60 = 30): boolean => {
+    const instructor = instructors.find((item) => item.id === instructorId)
+    if (!instructor) { window.alert('Choose an instructor before scheduling the trial.'); return false }
+    const result = bookTrialEntry(instructor, scheduleEntries, instructorAvailability, lead, startsAtIso, durationMinutes)
+    if (!result.ok) { if (result.message) window.alert(result.message); return false }
+    const withEntry = result.isUpdate ? scheduleEntries.map((entry) => entry.id === result.entry.id ? result.entry : entry) : [...scheduleEntries, result.entry]
+    replaceEntries(result.autoBreak ? [...withEntry, result.autoBreak] : withEntry)
+    replaceOpenings(trialOpenings.filter((opening) => opening.instructor !== instructor.name || new Date(opening.startsAt).getTime() !== new Date(result.entry.startsAt!).getTime()))
+    logScheduleActivity({ action: result.isUpdate ? 'Scheduled lesson updated' : 'Scheduled lesson added', instructor: instructor.name, studentName: result.entry.studentName, details: describeScheduleEntry(result.entry) })
+    if (result.autoBreak) logScheduleActivity({ action: 'Break auto-scheduled', instructor: instructor.name, details: `${formatClock(entryStartTime(result.autoBreak))}–${formatClock(`${String(Math.floor((timeMinutes(entryStartTime(result.autoBreak)) + 15) / 60)).padStart(2, '0')}:${String((timeMinutes(entryStartTime(result.autoBreak)) + 15) % 60).padStart(2, '0')}`)} · after 3.75 consecutive hours · remove it if you don't need it` })
+    return true
+  }
 
   if (loadingData) return <AppLoading message="Loading your lead manager…" />
   if (dataError && !leads.length && !instructors.length) return <main className="app-loading error-loading"><strong>We couldn’t load your data.</strong><span>{dataError}</span><button className="primary" onClick={() => window.location.reload()}>Try again</button></main>
@@ -452,10 +465,10 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} trialOpenings={trialOpenings} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
-        {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} />}
+        {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} />}
       </main>
 
@@ -472,8 +485,9 @@ function NavButton({ active, onClick, icon, label }: { active: boolean; onClick:
   return <button className={active ? 'nav-active' : ''} onClick={onClick}><span className="nav-icon">{icon}</span><span className="nav-label">{label}</span></button>
 }
 
-function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial }: {
+function Today({ leads, instructors, trialOpenings, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial }: {
   leads: Lead[]
+  instructors: Instructor[]
   trialOpenings: TrialOpening[]
   onSelect: (id: string) => void
   onLog: (id: string, type: ActivityType) => void
@@ -481,7 +495,7 @@ function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote, o
   onTakeNote: (id: string) => void
   onResolveTrialYes: (lead: Lead, reason: TrialPromptReason, occurredAt: string) => void
   onResolveTrialNo: (lead: Lead, comment: string) => void
-  onResolveSecondTrial: (lead: Lead, occurredAt: string) => void
+  onResolveSecondTrial: (lead: Lead, instructorId: string, occurredAt: string) => void
 }) {
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
   const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt)
@@ -543,7 +557,7 @@ function Today({ leads, trialOpenings, onSelect, onLog, onTextNow, onTakeNote, o
         return <article key={date.toDateString()}><div className="outreach-date"><strong>{date.toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div><div className="outreach-preview"><strong>{items.length} planned {items.length === 1 ? 'contact' : 'contacts'}</strong><span>{items.slice(0, 4).map((item) => `${item.lead.name} · ${item.template.label}`).join('  •  ')}{items.length > 4 ? `  •  +${items.length - 4} more` : ''}</span></div><b>Be available around {earliest.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</b></article>
       })}{!upcomingDays.length && <div className="today-complete"><strong>No upcoming outreach scheduled</strong><span>New leads and future cadence dates will appear here.</span></div>}</div>
     </section>
-    {trialPrompt && <TrialPromptModal prompt={trialPrompt} onClose={() => setTrialPrompt(null)} onConfirmYes={(occurredAt) => { onResolveTrialYes(trialPrompt.lead, trialPrompt.reason, occurredAt); setTrialPrompt(null) }} onConfirmNo={(comment) => { onResolveTrialNo(trialPrompt.lead, comment); setTrialPrompt(null) }} onConfirmSecondTrial={(occurredAt) => { onResolveSecondTrial(trialPrompt.lead, occurredAt); setTrialPrompt(null) }} />}
+    {trialPrompt && <TrialPromptModal prompt={trialPrompt} instructors={instructors} onClose={() => setTrialPrompt(null)} onConfirmYes={(occurredAt) => { onResolveTrialYes(trialPrompt.lead, trialPrompt.reason, occurredAt); setTrialPrompt(null) }} onConfirmNo={(comment) => { onResolveTrialNo(trialPrompt.lead, comment); setTrialPrompt(null) }} onConfirmSecondTrial={(instructorId, occurredAt) => { onResolveSecondTrial(trialPrompt.lead, instructorId, occurredAt); setTrialPrompt(null) }} />}
   </>
 }
 
@@ -582,26 +596,33 @@ function PendingActions({ leads, onSelect, onLog, onTextNow, onTakeNote, onPromp
   </section>
 }
 
-function TrialPromptModal({ prompt, onClose, onConfirmYes, onConfirmNo, onConfirmSecondTrial }: {
+function TrialPromptModal({ prompt, instructors, onClose, onConfirmYes, onConfirmNo, onConfirmSecondTrial }: {
   prompt: TrialPromptState
+  instructors: Instructor[]
   onClose: () => void
   onConfirmYes: (occurredAt: string) => void
   onConfirmNo: (comment: string) => void
-  onConfirmSecondTrial: (occurredAt: string) => void
+  onConfirmSecondTrial: (instructorId: string, occurredAt: string) => void
 }) {
+  const eligibleInstructors = instructors.filter((item) => item.instruments.some((instrument) => instrument.toLowerCase() === prompt.lead.instrument.toLowerCase()))
   const [when, setWhen] = useState(() => toDateTimeInput(new Date()))
   const [comment, setComment] = useState('')
+  const [instructorId, setInstructorId] = useState(eligibleInstructors[0]?.id ?? '')
   const label = prompt.reason === 'booking_form' ? 'Booking form complete' : prompt.reason === 'trial_complete' ? 'Trial complete' : prompt.decision === 'second_trial' ? 'Schedule second trial' : 'Converted to student'
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal trial-prompt-modal" onSubmit={(event) => { event.preventDefault(); prompt.decision === 'yes' ? onConfirmYes(new Date(when).toISOString()) : prompt.decision === 'second_trial' ? onConfirmSecondTrial(new Date(when).toISOString()) : onConfirmNo(comment.trim()) }}>
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal trial-prompt-modal" onSubmit={(event) => { event.preventDefault(); prompt.decision === 'yes' ? onConfirmYes(new Date(when).toISOString()) : prompt.decision === 'second_trial' ? onConfirmSecondTrial(instructorId, new Date(when).toISOString()) : onConfirmNo(comment.trim()) }}>
     <button type="button" className="close" onClick={onClose}>×</button>
     <p className="eyebrow">{prompt.lead.name}</p>
     <h2>{label}{prompt.decision === 'no' ? '?' : ''}</h2>
     {prompt.decision === 'yes'
       ? <label className="field">When did this happen?<input required type="datetime-local" value={when} max={toDateTimeInput(new Date())} onChange={(event) => setWhen(event.target.value)} /></label>
       : prompt.decision === 'second_trial'
-      ? <label className="field">New trial date and time<input required type="datetime-local" value={when} min={toDateTimeInput(new Date())} onChange={(event) => setWhen(event.target.value)} /></label>
+      ? <>
+        <label className="field">Instructor<select required value={instructorId} onChange={(event) => setInstructorId(event.target.value)}><option value="">Choose an instructor</option>{eligibleInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+        {!eligibleInstructors.length && <p className="picker-warning"><strong>No instructor teaches {prompt.lead.instrument}.</strong><span>Add one in Settings before scheduling this trial.</span></p>}
+        <label className="field">New trial date and time<input required type="datetime-local" value={when} min={toDateTimeInput(new Date())} onChange={(event) => setWhen(event.target.value)} /></label>
+      </>
       : <label className="field">What happened?<textarea required rows={4} autoFocus value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a note…" /></label>}
-    <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button className="primary" type="submit" disabled={prompt.decision === 'no' && !comment.trim()}>{prompt.decision === 'no' ? 'Save note' : 'Save'}</button></div>
+    <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button className="primary" type="submit" disabled={(prompt.decision === 'no' && !comment.trim()) || (prompt.decision === 'second_trial' && !instructorId)}>{prompt.decision === 'no' ? 'Save note' : 'Save'}</button></div>
   </form></div>
 }
 
@@ -628,9 +649,10 @@ function LeadTable({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) 
 }
 
 
-function ActivityLog({ leads, instruments, scheduleActivities, onSelect, onSaveActivity, onDelete, onDeleteSchedule, onInsertCadenceProgress, onAddLead, onEditActivity, onEditScheduleActivity }: {
+function ActivityLog({ leads, instruments, instructors, scheduleActivities, onSelect, onSaveActivity, onDelete, onDeleteSchedule, onInsertCadenceProgress, onAddLead, onEditActivity, onEditScheduleActivity, onBookTrial }: {
   leads: Lead[]
   instruments: string[]
+  instructors: Instructor[]
   scheduleActivities: ScheduleActivity[]
   onSelect: (id: string) => void
   onSaveActivity: (input: ManualActivityInput) => void
@@ -640,6 +662,7 @@ function ActivityLog({ leads, instruments, scheduleActivities, onSelect, onSaveA
   onAddLead: (lead: Lead) => Promise<void>
   onEditActivity: (leadId: string, activityId: string, occurredAt: string, outcome: string) => void
   onEditScheduleActivity: (id: string, occurredAt: string, details: string) => void
+  onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
 }) {
   const [range, setRange] = useState<'month' | 'year'>('month')
   const [anchor, setAnchor] = useState(() => new Date())
@@ -733,10 +756,17 @@ function ActivityLog({ leads, instruments, scheduleActivities, onSelect, onSaveA
       </article>)}
       {!entries.length && <div className="empty-state"><strong>No activity in {periodLabel}</strong><span>Use the arrows or switch to the yearly view.</span></div>}
     </div>
-  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}{cadenceInsertOpen && <CadenceInsertModal leads={leads} instruments={instruments} onClose={() => setCadenceInsertOpen(false)} onSave={(leadId, activities, leadUpdate) => { onInsertCadenceProgress(leadId, activities, leadUpdate); setCadenceInsertOpen(false) }} onAddLead={onAddLead} />}{simpleEditor && <SimpleActivityEditModal editor={simpleEditor} onClose={() => setSimpleEditor(null)} onSave={(occurredAt, outcome) => { onEditActivity(simpleEditor.leadId, simpleEditor.activityId, occurredAt, outcome); setAnchor(new Date(occurredAt)); setSimpleEditor(null) }} />}{scheduleEditor && <ScheduleActivityEditModal editor={scheduleEditor} onClose={() => setScheduleEditor(null)} onSave={(occurredAt, details) => { onEditScheduleActivity(scheduleEditor.id, occurredAt, details); setAnchor(new Date(occurredAt)); setScheduleEditor(null) }} />}</>
+  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} instructors={instructors} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} onBookTrial={onBookTrial} />}{cadenceInsertOpen && <CadenceInsertModal leads={leads} instruments={instruments} instructors={instructors} onClose={() => setCadenceInsertOpen(false)} onSave={(leadId, activities, leadUpdate) => { onInsertCadenceProgress(leadId, activities, leadUpdate); setCadenceInsertOpen(false) }} onAddLead={onAddLead} onBookTrial={onBookTrial} />}{simpleEditor && <SimpleActivityEditModal editor={simpleEditor} onClose={() => setSimpleEditor(null)} onSave={(occurredAt, outcome) => { onEditActivity(simpleEditor.leadId, simpleEditor.activityId, occurredAt, outcome); setAnchor(new Date(occurredAt)); setSimpleEditor(null) }} />}{scheduleEditor && <ScheduleActivityEditModal editor={scheduleEditor} onClose={() => setScheduleEditor(null)} onSave={(occurredAt, details) => { onEditScheduleActivity(scheduleEditor.id, occurredAt, details); setAnchor(new Date(occurredAt)); setScheduleEditor(null) }} />}</>
 }
 
-function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[]; initial: ManualActivityInput; onClose: () => void; onSave: (input: ManualActivityInput) => void }) {
+function ActivityEditorModal({ leads, instructors, initial, onClose, onSave, onBookTrial }: {
+  leads: Lead[]
+  instructors: Instructor[]
+  initial: ManualActivityInput
+  onClose: () => void
+  onSave: (input: ManualActivityInput) => void
+  onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
+}) {
   const defaults: Record<ManualEventType, string> = {
     call: 'Attempted call', text: 'Message sent', email: 'Email sent', note: '',
     trial_booked: 'Trial lesson booked', trial_form_completed: 'Trial confirmation form completed', trial_completed: 'Trial lesson completed',
@@ -747,12 +777,24 @@ function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[
   const [occurredAt, setOccurredAt] = useState(() => toDateTimeInput(new Date(initial.occurredAt)))
   const [trialAt, setTrialAt] = useState(() => initial.trialAt ? toDateTimeInput(new Date(initial.trialAt)) : toDateTimeInput(new Date()))
   const [outcome, setOutcome] = useState(initial.outcome)
+  const lead = leads.find((item) => item.id === leadId)
+  const eligibleInstructors = lead ? instructors.filter((item) => item.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase())) : []
+  const [instructorId, setInstructorId] = useState(eligibleInstructors[0]?.id ?? '')
   const changeType = (next: ManualEventType) => {
     if (outcome === defaults[type]) setOutcome(defaults[next])
     setType(next)
   }
   const trialDateRequired = type === 'trial_booked'
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal activity-editor" onSubmit={(event) => { event.preventDefault(); if (leadId && occurredAt && outcome.trim() && (!trialDateRequired || trialAt)) onSave({ leadId, activityId: initial.activityId, type, occurredAt: new Date(occurredAt).toISOString(), outcome: outcome.trim(), trialAt: trialDateRequired ? new Date(trialAt).toISOString() : undefined }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">{initial.activityId ? 'Edit activity' : 'Add activity'}</p><h2>{initial.activityId ? 'Correct this event' : 'Log a past event'}</h2><label className="field">Lead<select required disabled={Boolean(initial.activityId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((lead) => <option value={lead.id} key={lead.id}>{lead.name}{lead.studentName && lead.studentName !== lead.name ? ` / ${lead.studentName}` : ''} · {lead.instrument}</option>)}</select></label><div className="field-pair"><label className="field">Event type<select value={type} onChange={(event) => changeType(event.target.value as ManualEventType)}><option value="call">Call</option><option value="text">Text</option><option value="email">Email</option><option value="note">Note</option><option value="trial_booked">Trial lesson booked</option><option value="trial_form_completed">Trial confirmation form completed</option><option value="trial_completed">Trial lesson completed</option><option value="became_student">Became an active student</option><option value="unenrolled">Student unenrolled</option></select></label><label className="field">Event date and time<input required type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label></div>{trialDateRequired && <label className="field event-highlight">Trial lesson date and time<input required type="datetime-local" value={trialAt} onChange={(event) => setTrialAt(event.target.value)} /><small>This is the lesson time—not when it was booked.</small></label>}<label className="field">Details<textarea required rows={4} value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="What happened?" /></label><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!leadId || !occurredAt || !outcome.trim() || (trialDateRequired && !trialAt)}>{initial.activityId ? 'Save changes' : 'Add event'}</button></div></form></div>
+  const isNewTrialBooking = trialDateRequired && !initial.activityId
+  const save = () => {
+    if (!leadId || !occurredAt || !outcome.trim() || (trialDateRequired && !trialAt)) return
+    if (isNewTrialBooking) {
+      if (!lead || !instructorId) return
+      if (!onBookTrial(lead, instructorId, new Date(trialAt).toISOString())) return
+    }
+    onSave({ leadId, activityId: initial.activityId, type, occurredAt: new Date(occurredAt).toISOString(), outcome: outcome.trim(), trialAt: trialDateRequired ? new Date(trialAt).toISOString() : undefined })
+  }
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal activity-editor" onSubmit={(event) => { event.preventDefault(); save() }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">{initial.activityId ? 'Edit activity' : 'Add activity'}</p><h2>{initial.activityId ? 'Correct this event' : 'Log a past event'}</h2><label className="field">Lead<select required disabled={Boolean(initial.activityId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}><option value="">Choose a lead</option>{leads.map((item) => <option value={item.id} key={item.id}>{item.name}{item.studentName && item.studentName !== item.name ? ` / ${item.studentName}` : ''} · {item.instrument}</option>)}</select></label><div className="field-pair"><label className="field">Event type<select value={type} onChange={(event) => changeType(event.target.value as ManualEventType)}><option value="call">Call</option><option value="text">Text</option><option value="email">Email</option><option value="note">Note</option><option value="trial_booked">Trial lesson booked</option><option value="trial_form_completed">Trial confirmation form completed</option><option value="trial_completed">Trial lesson completed</option><option value="became_student">Became an active student</option><option value="unenrolled">Student unenrolled</option></select></label><label className="field">Event date and time<input required type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label></div>{trialDateRequired && <label className="field event-highlight">Trial lesson date and time<input required type="datetime-local" value={trialAt} onChange={(event) => setTrialAt(event.target.value)} /><small>This is the lesson time—not when it was booked.</small></label>}{isNewTrialBooking && <label className="field event-highlight">Instructor<select required value={instructorId} onChange={(event) => setInstructorId(event.target.value)}><option value="">Choose an instructor</option>{eligibleInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><small>This creates a real trial on that instructor's schedule.</small></label>}<label className="field">Details<textarea required rows={4} value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="What happened?" /></label><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!leadId || !occurredAt || !outcome.trim() || (trialDateRequired && !trialAt) || (isNewTrialBooking && !instructorId)}>{initial.activityId ? 'Save changes' : 'Add event'}</button></div></form></div>
 }
 
 function SimpleActivityEditModal({ editor, onClose, onSave }: { editor: { typeLabel: string; occurredAt: string; outcome: string }; onClose: () => void; onSave: (occurredAt: string, outcome: string) => void }) {
@@ -791,12 +833,14 @@ type CadenceStepState = { date: string; callDone: boolean; textDone: boolean }
 const emptyCadenceSteps = (): CadenceStepState[] => ACTIVE_CADENCE_STEPS.map(() => ({ date: '', callDone: true, textDone: true }))
 const isCadenceStepComplete = (step: CadenceStepState, needsCall: boolean) => Boolean(step.date) && (needsCall ? step.callDone && step.textDone : step.textDone)
 
-function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: {
+function CadenceInsertModal({ leads, instruments, instructors, onClose, onSave, onAddLead, onBookTrial }: {
   leads: Lead[]
   instruments: string[]
+  instructors: Instructor[]
   onClose: () => void
   onSave: (leadId: string, activities: Activity[], leadUpdate?: Partial<Lead>) => void
   onAddLead: (lead: Lead) => Promise<void>
+  onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
 }) {
   const [personMode, setPersonMode] = useState<'existing' | 'new'>('existing')
   const [leadId, setLeadId] = useState('')
@@ -807,6 +851,8 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
   const [newInstrument, setNewInstrument] = useState(instruments[0] ?? '')
   const [newPhone, setNewPhone] = useState('')
   const [newReceivedAt, setNewReceivedAt] = useState(() => toDateTimeInput(new Date()))
+  const effectiveInstrument = personMode === 'new' ? newInstrument : lead?.instrument
+  const eligibleInstructors = effectiveInstrument ? instructors.filter((item) => item.instruments.some((instrument) => instrument.toLowerCase() === effectiveInstrument.toLowerCase())) : []
 
   const [steps, setSteps] = useState<CadenceStepState[]>(emptyCadenceSteps())
   const [nurtureDate, setNurtureDate] = useState('')
@@ -814,6 +860,7 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
   const [nurtureTextDone, setNurtureTextDone] = useState(true)
 
   const [trialBookedAt, setTrialBookedAtRaw] = useState('')
+  const [trialInstructorId, setTrialInstructorId] = useState('')
   const [trialFormDate, setTrialFormDateRaw] = useState('')
   const [trialCompletedDate, setTrialCompletedDateRaw] = useState('')
   const [becameStudentDate, setBecameStudentDate] = useState('')
@@ -823,7 +870,7 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
 
   const resetProgressFields = () => {
     setSteps(emptyCadenceSteps()); setNurtureDate(''); setNurtureCallDone(true); setNurtureTextDone(true)
-    setTrialBookedAtRaw(''); setTrialFormDateRaw(''); setTrialCompletedDateRaw(''); setBecameStudentDate('')
+    setTrialBookedAtRaw(''); setTrialInstructorId(''); setTrialFormDateRaw(''); setTrialCompletedDateRaw(''); setBecameStudentDate('')
   }
 
   const isExistingNurture = lead?.status === 'nurture' || lead?.status === 'nurture_long_term'
@@ -859,6 +906,7 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
         activities: [], holdFormComplete: false, trialAttended: false,
       }
       targetLeadId = createdLead.id
+      await onAddLead(createdLead)
     } else if (!lead) return
 
     const activities: Activity[] = []
@@ -887,7 +935,10 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
         : { id: crypto.randomUUID(), type: 'note', occurredAt: date.toISOString(), outcome: 'Text attempted — not completed (backfilled)' })
     }
     if (trialBookedAt) {
+      const bookingLead = createdLead ?? lead
+      if (!bookingLead || !trialInstructorId) return
       const iso = new Date(trialBookedAt).toISOString()
+      if (!onBookTrial(bookingLead, trialInstructorId, iso)) return
       activities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: iso, outcome: `Trial lesson booked for ${formatTrialTime(iso)} (backfilled)` })
       leadUpdate.trialAt = iso
     }
@@ -900,13 +951,12 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
     }
 
     if (!activities.length) return
-    if (createdLead) await onAddLead(createdLead)
     onSave(targetLeadId, activities, Object.keys(leadUpdate).length ? leadUpdate : undefined)
   }
 
   const personValid = personMode === 'existing' ? Boolean(lead) : Boolean(newName.trim() && newInstrument)
   const outreachFilled = track === 'active' ? anyStepFilled : track === 'nurture' ? Boolean(nurtureDate) : false
-  const canSave = personValid && (outreachFilled || anyTrialFilled)
+  const canSave = personValid && (outreachFilled || anyTrialFilled) && (!trialBookedAt || Boolean(trialInstructorId))
 
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal cadence-insert-modal">
     <button type="button" className="close" onClick={onClose}>×</button>
@@ -957,6 +1007,7 @@ function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: 
       <h3>Trial &amp; enrollment milestones</h3>
       <p className="muted">Optional — backfill any of these that already happened, in order.</p>
       <label className="field">Trial lesson booked for<input type="datetime-local" value={trialBookedAt} onChange={(event) => setTrialBookedAt(event.target.value)} /></label>
+      {trialBookedAt && <label className="field event-highlight">Instructor<select required value={trialInstructorId} onChange={(event) => setTrialInstructorId(event.target.value)}><option value="">Choose an instructor</option>{eligibleInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><small>This creates a real trial on that instructor's schedule.</small></label>}
       <label className="field">Trial confirmation form completed<input type="datetime-local" disabled={!trialBookedAt} value={trialFormDate} max={toDateTimeInput(new Date())} onChange={(event) => setTrialFormDate(event.target.value)} /></label>
       <label className="field">Trial lesson completed<input type="datetime-local" disabled={!trialFormDate} value={trialCompletedDate} max={toDateTimeInput(new Date())} onChange={(event) => setTrialCompletedDate(event.target.value)} /></label>
       <label className="field">Became an active student<input type="datetime-local" disabled={!trialCompletedDate} value={becameStudentDate} max={toDateTimeInput(new Date())} onChange={(event) => setBecameStudentDate(event.target.value)} /></label>
@@ -1182,6 +1233,56 @@ function describeScheduleEntry(entry: ScheduleEntry) {
   if (entry.kind === 'regular') return `${entry.instrument} · ${entry.repeatIntervalWeeks === 2 ? 'Every other' : 'Every'} ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)} · ${entry.durationMinutes ?? 30} minutes · Starting ${new Date(`${entry.startsOn}T00:00:00`).toLocaleDateString('en-US')}`
   if (entry.kind === 'break') return `Break · ${formatTrialTime(entry.startsAt!)} · ${entry.durationMinutes ?? 15} minutes`
   return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)} · ${entry.durationMinutes ?? 30} minutes`
+}
+
+type TrialBookingResult = { ok: true; entry: ScheduleEntry; isUpdate: boolean; autoBreak?: ScheduleEntry } | { ok: false; message?: string }
+
+function bookTrialEntry(instructor: Instructor, allEntries: ScheduleEntry[], availability: InstructorAvailability[], lead: Lead, startsAtIso: string, durationMinutes: 30 | 45 | 60): TrialBookingResult {
+  const existingTrialEntry = allEntries.find((entry) => entry.kind === 'trial' && entry.leadId === lead.id)
+  const entries = existingTrialEntry ? allEntries.filter((entry) => entry.id !== existingTrialEntry.id) : allEntries
+  const date = new Date(startsAtIso)
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  if (!lessonFitsAvailability(availability, instructor.id, date.getDay(), time, durationMinutes)) {
+    return { ok: false, message: `${instructor.name} is not marked available for that entire lesson.` }
+  }
+  const conflictingEntry = entries.find((entry) => entry.instructorId === instructor.id
+    && entryOccursOnDate(entry, date)
+    && timesOverlap(entryStartTime(entry), entry.durationMinutes ?? 30, time, durationMinutes))
+  if (conflictingEntry) {
+    return { ok: false, message: `That time overlaps ${conflictingEntry.studentName}'s scheduled time.` }
+  }
+
+  const proposedStart = timeMinutes(time)
+  const proposedEnd = proposedStart + durationMinutes
+  const sameDayIntervals: [number, number][] = entries
+    .filter((entry) => entry.instructorId === instructor.id && entryOccursOnDate(entry, date))
+    .map((entry) => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
+  sameDayIntervals.push([proposedStart, proposedEnd])
+  sameDayIntervals.sort((a, b) => a[0] - b[0])
+  const mergedIntervals: [number, number][] = []
+  for (const [start, end] of sameDayIntervals) {
+    const last = mergedIntervals[mergedIntervals.length - 1]
+    if (last && start - last[1] < 15) last[1] = Math.max(last[1], end)
+    else mergedIntervals.push([start, end])
+  }
+  const block = mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
+  const blockMinutes = block ? block[1] - block[0] : durationMinutes
+
+  if (blockMinutes > 225) {
+    const hours = (blockMinutes / 60).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+    if (!window.confirm(`This gives ${instructor.name} ${hours} consecutive hours with no break of 15+ minutes on ${date.toLocaleDateString('en-US')}. A break is recommended after 3.75 hours. Schedule anyway?`)) return { ok: false }
+  }
+
+  const entry: ScheduleEntry = { id: existingTrialEntry?.id ?? crypto.randomUUID(), instructorId: instructor.id, leadId: lead.id, studentName: lead.studentName ?? lead.name, instrument: lead.instrument, kind: 'trial', durationMinutes, startsAt: date.toISOString() }
+  let autoBreak: ScheduleEntry | undefined
+  if (block && blockMinutes > 225) {
+    const breakStartMinutes = block[1]
+    const breakTime = `${String(Math.floor(breakStartMinutes / 60)).padStart(2, '0')}:${String(breakStartMinutes % 60).padStart(2, '0')}`
+    const breakFits = lessonFitsAvailability(availability, instructor.id, date.getDay(), breakTime, 15)
+    const breakOccupied = entries.some((entry2) => entry2.instructorId === instructor.id && entryOccursOnDate(entry2, date) && timesOverlap(entryStartTime(entry2), entry2.durationMinutes ?? 30, breakTime, 15))
+    if (breakFits && !breakOccupied) autoBreak = { id: crypto.randomUUID(), instructorId: instructor.id, studentName: 'Break', instrument: instructor.instruments[0], kind: 'break', durationMinutes: 15, startsAt: dateAtTime(date, breakTime).toISOString() }
+  }
+  return { ok: true, entry, isUpdate: Boolean(existingTrialEntry), autoBreak }
 }
 
 function upcomingEntryCoversSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
