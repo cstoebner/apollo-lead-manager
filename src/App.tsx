@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
+import apolloIcon from './assets/apollo-icon.png'
+import apolloLogoFull from './assets/apollo-logo-full.png'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
@@ -100,7 +102,7 @@ function Login() {
   }
 
   return <main className="welcome-shell"><form className="welcome-card login-card" onSubmit={submit}>
-    <div className="brand-mark">A</div><p className="eyebrow">Apollo Music Academy</p><h1>Welcome back.</h1>
+    <img className="brand-mark" src={apolloIcon} alt="Apollo" /><p className="eyebrow">Apollo Music Academy</p><h1>Welcome back.</h1>
     <p className="welcome-copy">Sign in to your private lead manager.</p>
     <label className="field">Email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus /></label>
     <label className="field">Password<input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
@@ -110,14 +112,14 @@ function Login() {
 }
 
 function AppLoading({ message }: { message: string }) {
-  return <main className="app-loading"><div className="brand-mark">A</div><strong>{message}</strong></main>
+  return <main className="app-loading"><img className="brand-mark" src={apolloIcon} alt="Apollo" /><strong>{message}</strong></main>
 }
 
 function Welcome({ onEnter }: { onEnter: () => void }) {
   return (
     <main className="welcome-shell">
       <section className="welcome-card">
-        <div className="brand-mark">A</div>
+        <img className="brand-mark" src={apolloIcon} alt="Apollo" />
         <p className="eyebrow">Apollo Music Academy</p>
         <h1>Turn every new inquiry into a clear next step.</h1>
         <p className="welcome-copy">Follow up on time, fill more trials, and see which inquiries become students.</p>
@@ -248,9 +250,9 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     } : lead))
     persist(Promise.all([saveActivity(leadId, activity), ...(leadUpdate ? [updateLead(leadId, leadUpdate)] : [])]))
   }
-  const insertCadenceProgress = (leadId: string, activities: Activity[]) => {
-    setLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, activities: [...lead.activities, ...activities] } : lead))
-    persist(Promise.all(activities.map((activity) => saveActivity(leadId, activity))))
+  const insertCadenceProgress = (leadId: string, activities: Activity[], leadUpdate?: Partial<Lead>) => {
+    setLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, ...(leadUpdate ?? {}), activities: [...lead.activities, ...activities] } : lead))
+    persist(Promise.all([...activities.map((activity) => saveActivity(leadId, activity)), ...(leadUpdate ? [updateLead(leadId, leadUpdate)] : [])]))
   }
   const logScheduleActivity = (input: ScheduleLogInput) => {
     const activity: ScheduleActivity = { ...input, id: crypto.randomUUID(), occurredAt: new Date().toISOString() }
@@ -270,7 +272,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="logo"><span>A</span><div>Apollo<small>Lead manager</small></div></div>
+        <div className="logo"><img src={apolloLogoFull} alt="Apollo Lead Manager" /></div>
         <nav>
           <NavButton active={view === 'today'} onClick={() => setView('today')} icon="⌂" label="Today" />
           <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
@@ -293,7 +295,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'trials' && <Trials leads={leads} onSelect={setSelectedId} onTrialUpdate={updateTrial} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
-        {view === 'activity' && <ActivityLog leads={leads} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} />}
+        {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLead} />}
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} />}
       </main>
 
@@ -408,7 +410,7 @@ function Trials({ leads, onSelect, onTrialUpdate }: { leads: Lead[]; onSelect: (
   return <section className="card"><div className="section-head"><div><h2>Trial readiness</h2><p>See what must happen before and after each lesson.</p></div></div><div className="trial-grid">{trials.map((lead) => <article key={lead.id} className="trial-card"><div className="trial-date"><strong>{new Date(lead.trialAt!).getDate()}</strong><span>{new Date(lead.trialAt!).toLocaleDateString('en-US', { month: 'short' })}</span></div><div className="trial-info"><button className="trial-person" onClick={() => onSelect(lead.id)}><h3>{lead.name}</h3><p>{lead.instrument} · {formatDate(lead.trialAt!)}</p></button><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onTrialUpdate(lead.id, { holdFormComplete: event.target.checked }, event.target.checked ? 'Booking form completed' : 'Booking form marked incomplete')} /> Booking form complete</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onTrialUpdate(lead.id, { trialAttended: event.target.checked }, event.target.checked ? 'Trial marked completed' : 'Trial marked not completed')} /> Trial completed</label>{lead.trialAttended && lead.status !== 'active_student' && <span className="post-trial-pill">Post-trial · waiting to book lessons</span>}</div></article>)}</div></section>
 }
 
-function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDelete, onDeleteSchedule, onInsertCadenceProgress }: { leads: Lead[]; scheduleActivities: ScheduleActivity[]; onSelect: (id: string) => void; onSaveActivity: (input: ManualActivityInput) => void; onDelete: (leadId: string, activityId: string) => void; onDeleteSchedule: (id: string) => void; onInsertCadenceProgress: (leadId: string, activities: Activity[]) => void }) {
+function ActivityLog({ leads, instruments, scheduleActivities, onSelect, onSaveActivity, onDelete, onDeleteSchedule, onInsertCadenceProgress, onAddLead }: { leads: Lead[]; instruments: string[]; scheduleActivities: ScheduleActivity[]; onSelect: (id: string) => void; onSaveActivity: (input: ManualActivityInput) => void; onDelete: (leadId: string, activityId: string) => void; onDeleteSchedule: (id: string) => void; onInsertCadenceProgress: (leadId: string, activities: Activity[], leadUpdate?: Partial<Lead>) => void; onAddLead: (lead: Lead) => void }) {
   const [range, setRange] = useState<'month' | 'year'>('month')
   const [anchor, setAnchor] = useState(() => new Date())
   const [activityEditor, setActivityEditor] = useState<ManualActivityInput | null>(null)
@@ -492,7 +494,7 @@ function ActivityLog({ leads, scheduleActivities, onSelect, onSaveActivity, onDe
       </article>)}
       {!entries.length && <div className="empty-state"><strong>No activity in {periodLabel}</strong><span>Use the arrows or switch to the yearly view.</span></div>}
     </div>
-  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}{cadenceInsertOpen && <CadenceInsertModal leads={leads} onClose={() => setCadenceInsertOpen(false)} onSave={(leadId, activities) => { onInsertCadenceProgress(leadId, activities); setCadenceInsertOpen(false) }} />}</>
+  </section>{latestDeletion && <div className="undo-toast" role="status"><span>{latestDeletion.label}. Permanently deleting in 10 seconds.</span><button onClick={() => undoDeletion(latestDeletion.key)}>Undo</button></div>}{activityEditor && <ActivityEditorModal leads={leads} initial={activityEditor} onClose={() => setActivityEditor(null)} onSave={(input) => { onSaveActivity(input); setAnchor(new Date(input.occurredAt)); setActivityEditor(null) }} />}{cadenceInsertOpen && <CadenceInsertModal leads={leads} instruments={instruments} onClose={() => setCadenceInsertOpen(false)} onSave={(leadId, activities, leadUpdate) => { onInsertCadenceProgress(leadId, activities, leadUpdate); setCadenceInsertOpen(false) }} onAddLead={onAddLead} />}</>
 }
 
 function ActivityEditorModal({ leads, initial, onClose, onSave }: { leads: Lead[]; initial: ManualActivityInput; onClose: () => void; onSave: (input: ManualActivityInput) => void }) {
@@ -520,66 +522,175 @@ const ACTIVE_CADENCE_STEPS = [
   { label: 'Step 3 · Second follow-up', detail: 'Day 5 — text', needsCall: false },
   { label: 'Step 4 · Final follow-up', detail: 'Day 8 — text', needsCall: false },
 ]
+type CadenceStepState = { date: string; callDone: boolean; textDone: boolean }
+const emptyCadenceSteps = (): CadenceStepState[] => ACTIVE_CADENCE_STEPS.map(() => ({ date: '', callDone: true, textDone: true }))
+const isCadenceStepComplete = (step: CadenceStepState, needsCall: boolean) => Boolean(step.date) && (needsCall ? step.callDone && step.textDone : step.textDone)
 
-function CadenceInsertModal({ leads, onClose, onSave }: { leads: Lead[]; onClose: () => void; onSave: (leadId: string, activities: Activity[]) => void }) {
-  const eligibleLeads = leads.filter((item) => item.status === 'hot' || item.status === 'action_pending' || item.status === 'nurture' || item.status === 'nurture_long_term')
-  const [leadId, setLeadId] = useState(eligibleLeads[0]?.id ?? leads[0]?.id ?? '')
+function CadenceInsertModal({ leads, instruments, onClose, onSave, onAddLead }: {
+  leads: Lead[]
+  instruments: string[]
+  onClose: () => void
+  onSave: (leadId: string, activities: Activity[], leadUpdate?: Partial<Lead>) => void
+  onAddLead: (lead: Lead) => void
+}) {
+  const [personMode, setPersonMode] = useState<'existing' | 'new'>('existing')
+  const [leadId, setLeadId] = useState('')
   const lead = leads.find((item) => item.id === leadId)
-  const isNurture = lead?.status === 'nurture' || lead?.status === 'nurture_long_term'
-  const isActiveEligible = lead?.status === 'hot' || lead?.status === 'action_pending'
-  const [stepDates, setStepDates] = useState<string[]>(['', '', '', ''])
+  const [newName, setNewName] = useState('')
+  const [newInstrument, setNewInstrument] = useState(instruments[0] ?? '')
+  const [newPhone, setNewPhone] = useState('')
+
+  const [steps, setSteps] = useState<CadenceStepState[]>(emptyCadenceSteps())
   const [nurtureDate, setNurtureDate] = useState('')
+  const [nurtureCallDone, setNurtureCallDone] = useState(true)
+  const [nurtureTextDone, setNurtureTextDone] = useState(true)
 
-  const setStep = (index: number, value: string) => setStepDates((current) => {
-    const next = [...current]
-    next[index] = value
-    if (!value) for (let i = index + 1; i < next.length; i += 1) next[i] = ''
-    return next
-  })
+  const [trialBookedAt, setTrialBookedAtRaw] = useState('')
+  const [trialFormDate, setTrialFormDateRaw] = useState('')
+  const [trialCompletedDate, setTrialCompletedDateRaw] = useState('')
+  const [becameStudentDate, setBecameStudentDate] = useState('')
+  const setTrialBookedAt = (value: string) => { setTrialBookedAtRaw(value); if (!value) { setTrialFormDateRaw(''); setTrialCompletedDateRaw(''); setBecameStudentDate('') } }
+  const setTrialFormDate = (value: string) => { setTrialFormDateRaw(value); if (!value) { setTrialCompletedDateRaw(''); setBecameStudentDate('') } }
+  const setTrialCompletedDate = (value: string) => { setTrialCompletedDateRaw(value); if (!value) setBecameStudentDate('') }
 
-  const filledCount = stepDates.filter(Boolean).length
-  const contiguous = stepDates.every((value, index) => Boolean(value) === (index < filledCount))
-
-  const save = () => {
-    if (!lead) return
-    if (isNurture) {
-      if (!nurtureDate) return
-      const date = new Date(`${nurtureDate}T12:00:00`)
-      const activities: Activity[] = []
-      if (nurtureRequiresCall(lead, date)) activities.push({ id: crypto.randomUUID(), type: 'call', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Attempted call (backfilled)' })
-      activities.push({ id: crypto.randomUUID(), type: 'text', occurredAt: date.toISOString(), outcome: 'Message sent (backfilled)' })
-      onSave(lead.id, activities)
-      return
-    }
-    if (!filledCount || !contiguous) return
-    const activities: Activity[] = []
-    stepDates.forEach((value, index) => {
-      if (!value) return
-      const date = new Date(`${value}T12:00:00`)
-      if (ACTIVE_CADENCE_STEPS[index].needsCall) activities.push({ id: crypto.randomUUID(), type: 'call', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Attempted call (backfilled)' })
-      activities.push({ id: crypto.randomUUID(), type: 'text', occurredAt: date.toISOString(), outcome: 'Message sent (backfilled)' })
-    })
-    onSave(lead.id, activities)
+  const resetProgressFields = () => {
+    setSteps(emptyCadenceSteps()); setNurtureDate(''); setNurtureCallDone(true); setNurtureTextDone(true)
+    setTrialBookedAtRaw(''); setTrialFormDateRaw(''); setTrialCompletedDateRaw(''); setBecameStudentDate('')
   }
 
-  const canSave = Boolean(lead) && (isNurture ? Boolean(nurtureDate) : isActiveEligible && filledCount > 0 && contiguous)
+  const isExistingNurture = lead?.status === 'nurture' || lead?.status === 'nurture_long_term'
+  const isExistingActiveEligible = lead?.status === 'hot' || lead?.status === 'action_pending'
+  const track: 'active' | 'nurture' | 'ineligible' | null = personMode === 'new' ? 'active' : !lead ? null : isExistingNurture ? 'nurture' : isExistingActiveEligible ? 'active' : 'ineligible'
+
+  const setStepDate = (index: number, value: string) => setSteps((current) => {
+    const next = current.map((step) => ({ ...step }))
+    next[index].date = value
+    if (!value) next[index].callDone = next[index].textDone = true
+    if (!value) for (let i = index + 1; i < next.length; i += 1) next[i] = { date: '', callDone: true, textDone: true }
+    return next
+  })
+  const toggleStepFlag = (index: number, key: 'callDone' | 'textDone', checked: boolean) => setSteps((current) => {
+    const next = current.map((step) => ({ ...step }))
+    next[index][key] = checked
+    if (!isCadenceStepComplete(next[index], ACTIVE_CADENCE_STEPS[index].needsCall)) for (let i = index + 1; i < next.length; i += 1) next[i] = { date: '', callDone: true, textDone: true }
+    return next
+  })
+  let unlockedIndex = 0
+  for (let i = 0; i < steps.length; i += 1) { if (isCadenceStepComplete(steps[i], ACTIVE_CADENCE_STEPS[i].needsCall)) unlockedIndex = i + 1; else break }
+  const anyStepFilled = steps.some((step) => step.date)
+  const anyTrialFilled = Boolean(trialBookedAt || trialFormDate || trialCompletedDate || becameStudentDate)
+
+  const save = () => {
+    let targetLeadId = leadId
+    let createdLead: Lead | null = null
+    if (personMode === 'new') {
+      if (!newName.trim() || !newInstrument) return
+      createdLead = {
+        id: crypto.randomUUID(), name: newName.trim(), phone: newPhone.trim(), email: '', instrument: newInstrument,
+        receivedAt: new Date().toISOString(), source: 'Manual entry', campaign: 'Manual entry', status: 'hot',
+        activities: [], holdFormComplete: false, trialAttended: false,
+      }
+      targetLeadId = createdLead.id
+    } else if (!lead) return
+
+    const activities: Activity[] = []
+    const leadUpdate: Partial<Lead> = {}
+
+    if (track === 'active' && anyStepFilled) {
+      steps.forEach((step, index) => {
+        if (index > unlockedIndex || !step.date) return
+        const needsCall = ACTIVE_CADENCE_STEPS[index].needsCall
+        const date = new Date(`${step.date}T12:00:00`)
+        if (needsCall) activities.push(step.callDone
+          ? { id: crypto.randomUUID(), type: 'call', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Attempted call (backfilled)' }
+          : { id: crypto.randomUUID(), type: 'note', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Call attempted — not completed (backfilled)' })
+        activities.push(step.textDone
+          ? { id: crypto.randomUUID(), type: 'text', occurredAt: date.toISOString(), outcome: 'Message sent (backfilled)' }
+          : { id: crypto.randomUUID(), type: 'note', occurredAt: date.toISOString(), outcome: 'Text attempted — not completed (backfilled)' })
+      })
+    }
+    if (track === 'nurture' && nurtureDate && lead) {
+      const date = new Date(`${nurtureDate}T12:00:00`)
+      if (nurtureRequiresCall(lead, date)) activities.push(nurtureCallDone
+        ? { id: crypto.randomUUID(), type: 'call', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Attempted call (backfilled)' }
+        : { id: crypto.randomUUID(), type: 'note', occurredAt: new Date(date.getTime() - 60_000).toISOString(), outcome: 'Call attempted — not completed (backfilled)' })
+      activities.push(nurtureTextDone
+        ? { id: crypto.randomUUID(), type: 'text', occurredAt: date.toISOString(), outcome: 'Message sent (backfilled)' }
+        : { id: crypto.randomUUID(), type: 'note', occurredAt: date.toISOString(), outcome: 'Text attempted — not completed (backfilled)' })
+    }
+    if (trialBookedAt) {
+      const iso = new Date(trialBookedAt).toISOString()
+      activities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: iso, outcome: `Trial lesson booked for ${formatTrialTime(iso)} (backfilled)` })
+      leadUpdate.trialAt = iso
+    }
+    if (trialFormDate) { activities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date(`${trialFormDate}T12:00:00`).toISOString(), outcome: 'Trial confirmation form completed (backfilled)' }); leadUpdate.holdFormComplete = true }
+    if (trialCompletedDate) { activities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date(`${trialCompletedDate}T12:00:00`).toISOString(), outcome: 'Trial lesson completed (backfilled)' }); leadUpdate.trialAttended = true }
+    if (becameStudentDate) {
+      const iso = new Date(`${becameStudentDate}T12:00:00`).toISOString()
+      activities.push({ id: crypto.randomUUID(), type: 'status_change', occurredAt: iso, outcome: 'Became an active student (backfilled)' })
+      leadUpdate.status = 'active_student'; leadUpdate.enrolledAt = iso
+    }
+
+    if (!activities.length) return
+    if (createdLead) onAddLead(createdLead)
+    onSave(targetLeadId, activities, Object.keys(leadUpdate).length ? leadUpdate : undefined)
+  }
+
+  const personValid = personMode === 'existing' ? Boolean(lead) : Boolean(newName.trim() && newInstrument)
+  const outreachFilled = track === 'active' ? anyStepFilled : track === 'nurture' ? Boolean(nurtureDate) : false
+  const canSave = personValid && (outreachFilled || anyTrialFilled)
 
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal cadence-insert-modal">
     <button type="button" className="close" onClick={onClose}>×</button>
     <p className="eyebrow">Insert into follow-up cycle</p>
-    <h2>Backfill past outreach steps</h2>
-    <p className="muted">For a lead who was already partway through their follow-up cadence before it was tracked here. This creates the call/text history needed so future reminders land on the right day — meant for a lead with no outreach logged here yet.</p>
-    <label className="field">Lead<select value={leadId} onChange={(event) => { setLeadId(event.target.value); setStepDates(['', '', '', '']); setNurtureDate('') }}><option value="">Choose a lead</option>{leads.map((item) => <option value={item.id} key={item.id}>{item.name}{item.studentName && item.studentName !== item.name ? ` / ${item.studentName}` : ''} · {statusLabels[item.status]}</option>)}</select></label>
-    {!lead ? null : isNurture ? <>
-      <p className="muted">Nurture check-ins repeat every two weeks indefinitely, so only the most recent one matters for scheduling the next. Enter that date — whether a call was needed that day is figured out automatically.</p>
-      <label className="field">Most recent completed check-in<input type="date" value={nurtureDate} min={localDateKey(nurtureStartedAt(lead))} max={localDateKey(new Date())} onChange={(event) => setNurtureDate(event.target.value)} /></label>
-    </> : isActiveEligible ? <div className="cadence-steps">{ACTIVE_CADENCE_STEPS.map((step, index) => {
-      const disabled = index > filledCount
+    <h2>Backfill outreach &amp; trial history</h2>
+    <p className="muted">For someone who was already partway through their follow-up cadence — or already trialed — before it was tracked here. This creates the history needed so future reminders land on the right day.</p>
+    <div className="cadence-person-toggle">
+      <button type="button" className={personMode === 'existing' ? 'active' : ''} onClick={() => { setPersonMode('existing'); resetProgressFields() }}>Existing lead</button>
+      <button type="button" className={personMode === 'new' ? 'active' : ''} onClick={() => { setPersonMode('new'); resetProgressFields() }}>New person</button>
+    </div>
+    {personMode === 'existing'
+      ? <LeadSearchPicker leads={leads} selectedLeadId={leadId} onClear={() => setLeadId('')} onSelect={(item) => { setLeadId(item.id); resetProgressFields() }} />
+      : <div className="cadence-new-person">
+        <label className="field">Name<input required value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Full name" /></label>
+        <div className="field-pair">
+          <label className="field">Instrument<select value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)}>{instruments.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label className="field">Phone <small>Optional</small><input value={newPhone} onChange={(event) => setNewPhone(event.target.value)} /></label>
+        </div>
+      </div>}
+
+    {track === 'ineligible' && lead && <p className="picker-warning"><strong>{lead.name} isn't in an active outreach or nurture cadence right now.</strong><span>Their status is {statusLabels[lead.status]}, so outreach steps don't apply — but you can still backfill trial or enrollment history below.</span></p>}
+
+    {track === 'active' && <div className="cadence-steps">{ACTIVE_CADENCE_STEPS.map((step, index) => {
+      const disabled = index > unlockedIndex
+      const current = steps[index]
       return <div className={`cadence-step${disabled ? ' step-disabled' : ''}`} key={step.label}>
-        <div><strong>{step.label}</strong><small>{step.detail}{disabled ? ' · Fill the previous step first' : ''}</small></div>
-        <input type="date" disabled={disabled} value={stepDates[index]} max={localDateKey(new Date())} onChange={(event) => setStep(index, event.target.value)} />
+        <div className="cadence-step-row"><div><strong>{step.label}</strong><small>{step.detail}{disabled ? ' · Fill the previous step first' : ''}</small></div><input type="date" disabled={disabled} value={current.date} max={localDateKey(new Date())} onChange={(event) => setStepDate(index, event.target.value)} /></div>
+        {current.date && <div className="cadence-step-flags">
+          {step.needsCall && <label><input type="checkbox" disabled={disabled} checked={current.callDone} onChange={(event) => toggleStepFlag(index, 'callDone', event.target.checked)} /> Call completed</label>}
+          <label><input type="checkbox" disabled={disabled} checked={current.textDone} onChange={(event) => toggleStepFlag(index, 'textDone', event.target.checked)} /> Text completed</label>
+        </div>}
       </div>
-    })}</div> : <p className="picker-warning"><strong>{lead.name} isn't in an active outreach or nurture cadence right now.</strong><span>Their status is {statusLabels[lead.status]}, so backfilling steps wouldn't change anything for them.</span></p>}
+    })}</div>}
+
+    {track === 'nurture' && lead && <>
+      <p className="muted">Nurture check-ins repeat every two weeks indefinitely, so only the most recent one matters for scheduling the next.</p>
+      <label className="field">Most recent check-in date<input type="date" value={nurtureDate} min={localDateKey(nurtureStartedAt(lead))} max={localDateKey(new Date())} onChange={(event) => setNurtureDate(event.target.value)} /></label>
+      {nurtureDate && <div className="cadence-step-flags">
+        {nurtureRequiresCall(lead, new Date(`${nurtureDate}T12:00:00`)) && <label><input type="checkbox" checked={nurtureCallDone} onChange={(event) => setNurtureCallDone(event.target.checked)} /> Call completed</label>}
+        <label><input type="checkbox" checked={nurtureTextDone} onChange={(event) => setNurtureTextDone(event.target.checked)} /> Text completed</label>
+      </div>}
+    </>}
+
+    {personValid && <div className="cadence-trial-section">
+      <h3>Trial &amp; enrollment milestones</h3>
+      <p className="muted">Optional — backfill any of these that already happened, in order.</p>
+      <label className="field">Trial lesson booked for<input type="datetime-local" value={trialBookedAt} onChange={(event) => setTrialBookedAt(event.target.value)} /></label>
+      <label className="field">Trial confirmation form completed<input type="date" disabled={!trialBookedAt} value={trialFormDate} max={localDateKey(new Date())} onChange={(event) => setTrialFormDate(event.target.value)} /></label>
+      <label className="field">Trial lesson completed<input type="date" disabled={!trialFormDate} value={trialCompletedDate} max={localDateKey(new Date())} onChange={(event) => setTrialCompletedDate(event.target.value)} /></label>
+      <label className="field">Became an active student<input type="date" disabled={!trialCompletedDate} value={becameStudentDate} max={localDateKey(new Date())} onChange={(event) => setBecameStudentDate(event.target.value)} /></label>
+    </div>}
+
     <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={!canSave} onClick={save}>Add to activity log</button></div>
   </section></div>
 }
@@ -745,6 +856,18 @@ function entryOccupyingSlot(entries: ScheduleEntry[], instructorId: string, date
   })
 }
 
+function biweeklyOffWeekAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
+  const key = localDateKey(date)
+  return entries.find((entry) => entry.instructorId === instructorId
+    && entry.kind === 'regular'
+    && (entry.repeatIntervalWeeks ?? 1) === 2
+    && entry.dayOfWeek === date.getDay()
+    && entry.startTime === time
+    && Boolean(entry.startsOn) && key >= entry.startsOn!
+    && (!entry.endsOn || key <= entry.endsOn)
+    && !onRecurrencePhase(entry, date))
+}
+
 function skippedRegularAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
   const key = localDateKey(date)
   return entries.find((entry) => entry.instructorId === instructorId
@@ -784,6 +907,7 @@ function UpcomingSlotNotes({ entries, onEdit }: { entries: ScheduleEntry[]; onEd
 
 function describeScheduleEntry(entry: ScheduleEntry) {
   if (entry.kind === 'regular') return `${entry.instrument} · ${entry.repeatIntervalWeeks === 2 ? 'Every other' : 'Every'} ${scheduleDays.find((day) => day.dayOfWeek === entry.dayOfWeek)?.label} at ${formatClock(entry.startTime!)} · ${entry.durationMinutes ?? 30} minutes · Starting ${new Date(`${entry.startsOn}T00:00:00`).toLocaleDateString('en-US')}`
+  if (entry.kind === 'break') return `Break · ${formatTrialTime(entry.startsAt!)} · ${entry.durationMinutes ?? 15} minutes`
   return `${entry.instrument} · ${entry.kind === 'trial' ? 'Trial' : 'One-time lesson'} · ${formatTrialTime(entry.startsAt!)} · ${entry.durationMinutes ?? 30} minutes`
 }
 
@@ -833,7 +957,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
   const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
   const [slotEditor, setSlotEditor] = useState<{ date: Date; time: string; entry?: ScheduleEntry } | null>(null)
-  const [removeChoice, setRemoveChoice] = useState<ScheduleEntry | null>(null)
+  const [removeChoice, setRemoveChoice] = useState<{ entry: ScheduleEntry; date: Date } | null>(null)
   const [hoveredTime, setHoveredTime] = useState<string | null>(null)
   useEffect(() => {
     if (!instructors.some((item) => item.id === instructorId)) setInstructorId(instructors[0]?.id ?? '')
@@ -912,11 +1036,27 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     }
     const block = mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
     const blockMinutes = block ? block[1] - block[0] : duration
+    let autoBreak: ScheduleEntry | null = null
+    let autoBreakTime = ''
+    let autoBreakEndTime = ''
     if (blockMinutes > 225) {
       const hours = (blockMinutes / 60).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
       if (!window.confirm(`This gives ${instructor.name} ${hours} consecutive hours with no break of 15+ minutes on ${date.toLocaleDateString('en-US')}. A break is recommended after 3.75 hours. Schedule anyway?`)) return
+      if (block) {
+        const breakStartMinutes = block[1]
+        const breakEndMinutes = breakStartMinutes + 15
+        const breakTime = `${String(Math.floor(breakStartMinutes / 60)).padStart(2, '0')}:${String(breakStartMinutes % 60).padStart(2, '0')}`
+        const breakFits = lessonFitsAvailability(availability, instructor.id, date.getDay(), breakTime, 15)
+        const breakOccupied = entries.some((entry) => entry.id !== next.id && entry.instructorId === instructor.id && entryOccursOnDate(entry, date) && timesOverlap(entryStartTime(entry), entry.durationMinutes ?? 30, breakTime, 15))
+        if (breakFits && !breakOccupied) {
+          autoBreak = { id: crypto.randomUUID(), instructorId: instructor.id, studentName: 'Break', instrument: instructor.instruments[0], kind: 'break', durationMinutes: 15, startsAt: dateAtTime(date, breakTime).toISOString() }
+          autoBreakTime = breakTime
+          autoBreakEndTime = `${String(Math.floor(breakEndMinutes / 60)).padStart(2, '0')}:${String(breakEndMinutes % 60).padStart(2, '0')}`
+        }
+      }
     }
-    onEntriesChange(entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next])
+    const savedEntries = entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next]
+    onEntriesChange(autoBreak ? [...savedEntries, autoBreak] : savedEntries)
     onOpeningsChange(openings.filter((opening) => {
       if (opening.instructor !== instructor.name) return true
       const openingDate = new Date(opening.startsAt)
@@ -932,6 +1072,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       studentName: next.studentName,
       details: existing ? `${describeScheduleEntry(existing)} → ${describeScheduleEntry(next)}` : describeScheduleEntry(next),
     })
+    if (autoBreak) onScheduleLog({ action: 'Break auto-scheduled', instructor: instructor.name, details: `${formatClock(autoBreakTime)}–${formatClock(autoBreakEndTime)} · after 3.75 consecutive hours · remove it if you don't need it` })
     if (existing?.kind === 'trial' && existing.leadId && (next.kind !== 'trial' || next.leadId !== existing.leadId)) {
       onLeadTrialChange(existing.leadId, { trialAt: undefined, holdFormComplete: false, trialAttended: false }, 'Trial removed from instructor schedule')
     }
@@ -983,7 +1124,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       <div className="week-switcher"><button onClick={() => setWeekStart(datePlusDays(weekStart, -7))}>←</button><strong>{weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{datePlusDays(weekStart, 5).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong><button onClick={() => setWeekStart(datePlusDays(weekStart, 7))}>→</button></div>
     </div>
 
-    <div className="schedule-legend"><span className="legend-open">Available</span><span className="legend-regular">🔒 Regular student</span><span className="legend-dated">Dated lesson</span><span className="legend-offered">Trial opening</span><small>Click an available green cell to add or remove it from Text Now.</small></div>
+    <div className="schedule-legend"><span className="legend-open">Available</span><span className="legend-regular">🔒 Regular student</span><span className="legend-dated">Dated lesson</span><span className="legend-offered">Trial opening</span><span className="legend-break">☕ Break</span><small>Click an available green cell to add or remove it from Text Now.</small></div>
 
     <div className="schedule-layout">
       <aside className="schedule-sidebar">
@@ -1006,24 +1147,25 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
             const entry = entryOccupyingSlot(entries, instructor.id, date, time)
             const entryStartsHere = entry ? entryAtSlot(entries, instructor.id, date, time)?.id === entry.id : false
             const skippedRegular = entry ? undefined : skippedRegularAtSlot(entries, instructor.id, date, time)
+            const biweeklyOff = entry || skippedRegular ? undefined : biweeklyOffWeekAtSlot(entries, instructor.id, date, time)
             const startsAt = dateAtTime(date, time)
             const opening = openings.find((item) => item.instructor === instructor.name && new Date(item.startsAt).getTime() === startsAt.getTime())
             const upcoming = upcomingEntriesAtSlot(entries, instructor.id, date, time)
             const upcomingContinuation = entry ? [] : upcomingEntryCoversSlot(entries, instructor.id, date, time).filter((item) => !upcoming.includes(item))
             const past = startsAt < new Date()
-            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
+            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : entry.kind === 'break' ? 'break' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
             return <div className={className} key={`${localDateKey(date)}-${time}`} onMouseEnter={() => setHoveredTime(time)} onMouseLeave={() => setHoveredTime((current) => current === time ? null : current)}>
-              {entry ? <><button type="button" className="cell-main" aria-label={`Edit ${entry.studentName}`} onClick={() => setSlotEditor({ date, time: entryStartTime(entry), entry })}>{entryStartsHere && <><strong>{entry.kind === 'regular' ? '🔒 ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : 'One-time'} · {entry.durationMinutes ?? 30} min{entry.kind === 'regular' && entry.repeatIntervalWeeks === 2 ? ' · Biweekly' : ''}</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
-                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">Reserved soon · {upcomingContinuation[0].studentName}</small>}{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
-                  : <>{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">Reserved soon · {upcomingContinuation[0].studentName}</small>}<UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>}
+              {entry ? <><button type="button" className="cell-main" aria-label={entry.kind === 'break' ? 'Remove break' : `Edit ${entry.studentName}`} onClick={() => entry.kind === 'break' ? setRemoveChoice({ entry, date }) : setSlotEditor({ date, time: entryStartTime(entry), entry })}>{entryStartsHere && <><strong>{entry.kind === 'regular' ? '🔒 ' : entry.kind === 'break' ? '☕ ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : entry.kind === 'break' ? 'Tap to remove' : 'One-time'} · {entry.durationMinutes ?? 30} min{entry.kind === 'regular' && entry.repeatIntervalWeeks === 2 ? ' · Biweekly' : ''}</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
+                : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.studentName} absent</small></> : biweeklyOff ? <><strong>Open this week</strong><small>{biweeklyOff.studentName} · next {datePlusDays(date, 7).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">See above · {upcomingContinuation[0].studentName}</small>}{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
+                  : <>{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">See above · {upcomingContinuation[0].studentName}</small>}<UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>}
             </div>
           })])}
         </div>
       </div>
     </div>
     <div className="selected-opening-summary"><strong>{instructorOpenings.length} upcoming {instructor.name} trial opening{instructorOpenings.length === 1 ? '' : 's'} available to Text Now</strong></div>
-    {slotEditor && <ScheduleEntryEditor leads={leads} instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => setRemoveChoice(slotEditor.entry!) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
-    {removeChoice && slotEditor && <RemoveEntryDialog entry={removeChoice} slotDate={slotEditor.date} onCancel={() => setRemoveChoice(null)} onRemoveAll={() => removeEntireSeries(removeChoice)} onRemoveForward={removeChoice.kind === 'regular' ? () => endSeriesFromDate(removeChoice, slotEditor.date) : undefined} />}
+    {slotEditor && <ScheduleEntryEditor leads={leads} instructor={instructor} slot={slotEditor} onClose={() => setSlotEditor(null)} onSave={saveEntry} onDelete={slotEditor.entry ? () => setRemoveChoice({ entry: slotEditor.entry!, date: slotEditor.date }) : undefined} onSkipDate={slotEditor.entry?.kind === 'regular' ? () => skipRegularDate(slotEditor.entry!, slotEditor.date) : undefined} />}
+    {removeChoice && <RemoveEntryDialog entry={removeChoice.entry} slotDate={removeChoice.date} onCancel={() => setRemoveChoice(null)} onRemoveAll={() => removeEntireSeries(removeChoice.entry)} onRemoveForward={removeChoice.entry.kind === 'regular' ? () => endSeriesFromDate(removeChoice.entry, removeChoice.date) : undefined} />}
   </section>
 }
 
@@ -1058,7 +1200,7 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
   const [studentName, setStudentName] = useState(existing?.studentName ?? matchedExistingLead?.studentName ?? matchedExistingLead?.name ?? '')
   const [kind, setKind] = useState<ScheduleEntryKind>(existing?.kind ?? 'regular')
   const [instrument, setInstrument] = useState(existing?.instrument ?? instructor.instruments[0])
-  const [durationMinutes, setDurationMinutes] = useState<30 | 45 | 60>(existing?.durationMinutes ?? 30)
+  const [durationMinutes, setDurationMinutes] = useState<30 | 45 | 60>(existing?.durationMinutes === 15 ? 30 : existing?.durationMinutes ?? 30)
   const [dayOfWeek, setDayOfWeek] = useState(existing?.dayOfWeek ?? slot.date.getDay())
   const [time, setTime] = useState(existing?.startTime ?? slot.time)
   const [startsOn, setStartsOn] = useState(existing?.startsOn ?? localDateKey(slot.date))
@@ -1092,7 +1234,7 @@ function RemoveEntryDialog({ entry, slotDate, onCancel, onRemoveAll, onRemoveFor
   onRemoveAll: () => void
   onRemoveForward?: () => void
 }) {
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}><section className="modal remove-entry-dialog">
+  return <div className="overlay modal-overlay remove-entry-overlay" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}><section className="modal remove-entry-dialog">
     <button type="button" className="close" onClick={onCancel}>×</button>
     <p className="eyebrow">Remove lesson</p>
     <h2>{entry.studentName}</h2>
@@ -1106,15 +1248,15 @@ function RemoveEntryDialog({ entry, slotDate, onCancel, onRemoveAll, onRemoveFor
   </section></div>
 }
 
-function LeadSearchPicker({ leads, instructor, selectedLeadId, initialName, onSelect, onClear }: { leads: Lead[]; instructor: Instructor; selectedLeadId: string; initialName?: string; onSelect: (lead: Lead) => void; onClear: () => void }) {
+function LeadSearchPicker({ leads, instructor, selectedLeadId, initialName, onSelect, onClear }: { leads: Lead[]; instructor?: Instructor; selectedLeadId: string; initialName?: string; onSelect: (lead: Lead) => void; onClear: () => void }) {
   const selectedLead = leads.find((lead) => lead.id === selectedLeadId)
   const [query, setQuery] = useState(selectedLead?.name ?? initialName ?? '')
   const [open, setOpen] = useState(true)
   const matchingLeads = leads
-    .filter((lead) => instructor.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()))
+    .filter((lead) => !instructor || instructor.instruments.some((instrument) => instrument.toLowerCase() === lead.instrument.toLowerCase()))
     .filter((lead) => `${lead.name} ${lead.studentName ?? ''} ${lead.instrument} ${statusLabels[lead.status]}`.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name))
-  return <div className="field lead-search-field"><span>Student or lead</span><div className="lead-search"><input autoFocus required value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); if (event.target.value !== selectedLead?.name && event.target.value !== selectedLead?.studentName) onClear(); setOpen(true) }} placeholder="Start typing a name…" autoComplete="off" />{open && <div className="lead-search-options">{matchingLeads.map((lead) => <button type="button" className={lead.id === selectedLeadId ? 'selected' : ''} key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(lead); setQuery(lead.studentName ?? lead.name); setOpen(false) }}><strong>{lead.studentName ?? lead.name}</strong><small>{lead.studentName && lead.studentName !== lead.name ? `Lead: ${lead.name} · ` : ''}{lead.instrument} · {statusLabels[lead.status]}</small></button>)}{!matchingLeads.length && <p>No people match this instructor’s instruments and your search.</p>}</div>}</div><small>Only people whose instrument is taught by {instructor.name} are shown.</small></div>
+  return <div className="field lead-search-field"><span>Student or lead</span><div className="lead-search"><input autoFocus required value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); if (event.target.value !== selectedLead?.name && event.target.value !== selectedLead?.studentName) onClear(); setOpen(true) }} placeholder="Start typing a name…" autoComplete="off" />{open && <div className="lead-search-options">{matchingLeads.map((lead) => <button type="button" className={lead.id === selectedLeadId ? 'selected' : ''} key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(lead); setQuery(lead.studentName ?? lead.name); setOpen(false) }}><strong>{lead.studentName ?? lead.name}</strong><small>{lead.studentName && lead.studentName !== lead.name ? `Lead: ${lead.name} · ` : ''}{lead.instrument} · {statusLabels[lead.status]}</small></button>)}{!matchingLeads.length && <p>{instructor ? 'No people match this instructor’s instruments and your search.' : 'No one matches your search.'}</p>}</div>}</div>{instructor && <small>Only people whose instrument is taught by {instructor.name} are shown.</small>}</div>
 }
 
 function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft: TextDraft; openings: TrialOpening[]; onClose: () => void; onManage: () => void; onSend: (message: string) => void }) {

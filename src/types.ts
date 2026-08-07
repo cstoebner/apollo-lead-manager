@@ -56,7 +56,7 @@ export interface InstructorAvailability {
   endTime: string
 }
 
-export type ScheduleEntryKind = 'regular' | 'trial' | 'one_time'
+export type ScheduleEntryKind = 'regular' | 'trial' | 'one_time' | 'break'
 
 export interface ScheduleEntry {
   id: string
@@ -65,7 +65,7 @@ export interface ScheduleEntry {
   studentName: string
   instrument: string
   kind: ScheduleEntryKind
-  durationMinutes: 30 | 45 | 60
+  durationMinutes: 15 | 30 | 45 | 60
   dayOfWeek?: number
   startTime?: string
   startsAt?: string
