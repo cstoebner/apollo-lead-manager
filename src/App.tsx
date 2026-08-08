@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import apolloIcon from './assets/apollo-icon.png'
 import apolloLogoFull from './assets/apollo-logo-full.png'
@@ -243,7 +243,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [quickNoteId, setQuickNoteId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
-  const [pendingUndos, setPendingUndos] = useState<{ key: string; label: string; timerId: number; revert: () => void }[]>([])
+  const [pendingUndos, setPendingUndos] = useState<{ key: string; label: string; timerId: number; leadId?: string; revert: () => void }[]>([])
   const selected = leads.find((lead) => lead.id === selectedId)
 
   useEffect(() => {
@@ -321,6 +321,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const deleteLead = (id: string) => {
     const lead = leads.find((item) => item.id === id)
     if (!lead || !window.confirm(`Permanently delete ${lead.name}? This will also delete their activity history and linked schedule entries. Use Unenrolled instead for a real former student.`)) return
+    cancelPendingForLead(id)
     setLeads((current) => current.filter((item) => item.id !== id))
     setScheduleEntries((current) => current.filter((entry) => entry.leadId !== id))
     setSelectedId(null)
@@ -335,6 +336,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: item.activities.filter((a) => a.id !== activity.id) } : item)),
       () => persist(saveActivity(id, activity)),
+      id,
     )
   }
   const changeStatus = (id: string, status: LeadStatus) => {
@@ -354,7 +356,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     const activity = lead?.activities.find((item) => item.id === activityId)
     if (!lead || !activity) return
     if (activity.type === 'lead_created') {
-      if (!window.confirm(`This is ${lead.name}'s founding record. Deleting it will permanently delete ${lead.name} and their entire history, since they were never really added. Continue?`)) return
+      cancelPendingForLead(leadId)
       setLeads((current) => current.filter((item) => item.id !== leadId))
       setScheduleEntries((current) => current.filter((entry) => entry.leadId !== leadId))
       setSelectedId((current) => current === leadId ? null : current)
@@ -397,15 +399,22 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: item.activities.filter((a) => a.id !== activity.id) } : item)),
       () => persist(saveActivity(id, activity)),
+      id,
     )
   }
-  const queueReversible = (key: string, label: string, apply: () => void, revert: () => void, commit: () => void) => {
+  const queueReversible =(key: string, label: string, apply: () => void, revert: () => void, commit: () => void, leadId?: string) => {
     apply()
     const timerId = window.setTimeout(() => {
       commit()
       setPendingUndos((current) => current.filter((item) => item.key !== key))
     }, 10_000)
-    setPendingUndos((current) => [...current, { key, label, timerId, revert }])
+    setPendingUndos((current) => [...current, { key, label, timerId, leadId, revert }])
+  }
+  const cancelPendingForLead = (leadId: string) => {
+    setPendingUndos((current) => {
+      current.filter((item) => item.leadId === leadId).forEach((item) => window.clearTimeout(item.timerId))
+      return current.filter((item) => item.leadId !== leadId)
+    })
   }
   const undoPending = (key: string) => {
     const pending = pendingUndos.find((item) => item.key === key)
@@ -431,6 +440,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
       () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      lead.id,
     )
   }
   const resolveTrialNo = (lead: Lead, comment: string) => {
@@ -442,6 +452,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
       () => persist(saveActivity(lead.id, activity)),
+      lead.id,
     )
   }
   const resolveSecondTrial = (lead: Lead, instructorId: string, occurredAtInput: string) => {
@@ -456,6 +467,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
       () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      lead.id,
     )
   }
   const resolveEnrollmentAgreement = (lead: Lead) => {
@@ -468,6 +480,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
       () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      lead.id,
     )
   }
   const overrideEnrollmentAgreement = (lead: Lead) => {
@@ -480,6 +493,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
       () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      lead.id,
     )
   }
   const requestSignaturesFromAllStudents = () => {
@@ -510,6 +524,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
       () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      lead.id,
     )
   }
   const saveManualActivity = ({ leadId, activityId, type, occurredAt, outcome, trialAt }: ManualActivityInput) => {
@@ -558,6 +573,15 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     return true
   }
 
+  const scheduleTrialFromCall = (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes: 30 | 45 | 60 = 30): boolean => {
+    if (!bookTrialOnSchedule(lead, instructorId, startsAtIso, durationMinutes)) return false
+    const leadUpdate: Partial<Lead> = { trialAt: startsAtIso, holdFormComplete: false, trialAttended: false }
+    const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome: `Trial lesson booked for ${formatTrialTime(startsAtIso)}` }
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item))
+    persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)]))
+    return true
+  }
+
   if (loadingData) return <AppLoading message="Loading your lead manager…" />
   if (dataError && !leads.length && !instructors.length) return <main className="app-loading error-loading"><strong>We couldn’t load your data.</strong><span>{dataError}</span><button className="primary" onClick={() => window.location.reload()}>Try again</button></main>
 
@@ -582,7 +606,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -610,12 +634,21 @@ function lastCallNote(lead: Lead) {
   return call.outcome
 }
 
-function CallOutcomeModal({ lead, onClose, onSubmit, onScheduleFollowUp }: { lead: Lead; onClose: () => void; onSubmit: (outcome: string) => void; onScheduleFollowUp: (note: string, atIso: string) => void }) {
+function CallOutcomeModal({ lead, instructors, onClose, onSubmit, onScheduleFollowUp, onBookTrial }: { lead: Lead; instructors: Instructor[]; onClose: () => void; onSubmit: (outcome: string) => void; onScheduleFollowUp: (note: string, atIso: string) => void; onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean }) {
   const [answered, setAnswered] = useState<boolean | null>(null)
   const [note, setNote] = useState('')
   const [wantsFollowUp, setWantsFollowUp] = useState(false)
   const [followUpDate, setFollowUpDate] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
+  const [wantsTrial, setWantsTrial] = useState(false)
+  const [trialInstructorId, setTrialInstructorId] = useState('')
+  const [trialDate, setTrialDate] = useState(() => toDateTimeInput(new Date(Date.now() + 86_400_000)))
+  const [trialDuration, setTrialDuration] = useState<30 | 45 | 60>(30)
+  const eligibleInstructors = instructors.filter((item) => shareInstrument(item.instruments, lead.instruments))
   const submit = () => {
+    if (wantsTrial) {
+      if (!trialInstructorId || !trialDate) return
+      if (!onBookTrial(lead, trialInstructorId, new Date(trialDate).toISOString(), trialDuration)) return
+    }
     onSubmit(note.trim())
     if (wantsFollowUp) onScheduleFollowUp(note.trim(), new Date(followUpDate).toISOString())
   }
@@ -631,13 +664,23 @@ function CallOutcomeModal({ lead, onClose, onSubmit, onScheduleFollowUp }: { lea
         <label className="field">What did you discuss?<textarea rows={4} autoFocus value={note} onChange={(event) => setNote(event.target.value)} placeholder="Notes from the call — this will show up next time they appear here." /></label>
         <label className="same-name-check"><input type="checkbox" checked={wantsFollowUp} onChange={(event) => setWantsFollowUp(event.target.checked)} /> Also schedule a follow-up outside the normal cadence</label>
         {wantsFollowUp && <label className="field">Follow up on<input required type="datetime-local" value={followUpDate} onChange={(event) => setFollowUpDate(event.target.value)} /></label>}
-        <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={!note.trim()} onClick={submit}>Save</button></div>
+        <label className="same-name-check"><input type="checkbox" checked={wantsTrial} onChange={(event) => setWantsTrial(event.target.checked)} /> Also schedule their trial lesson</label>
+        {wantsTrial && <div className="event-highlight">
+          <label className="field">Instructor<select required value={trialInstructorId} onChange={(event) => setTrialInstructorId(event.target.value)}><option value="">Choose an instructor</option>{eligibleInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+          {!eligibleInstructors.length && <p className="picker-warning"><strong>No instructor teaches {leadInstrumentLabel(lead)}.</strong><span>Add one in Settings before scheduling this trial.</span></p>}
+          <div className="field-pair">
+            <label className="field">Trial date and time<input required type="datetime-local" value={trialDate} onChange={(event) => setTrialDate(event.target.value)} /></label>
+            <label className="field">Length<select value={trialDuration} onChange={(event) => setTrialDuration(Number(event.target.value) as 30 | 45 | 60)}><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></label>
+          </div>
+          <small>This creates a real trial on that instructor's schedule.</small>
+        </div>}
+        <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={!note.trim() || (wantsTrial && !trialInstructorId)} onClick={submit}>Save</button></div>
       </>}
     </div>
   </div>
 }
 
-function Today({ leads, instructors, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp }: {
+function Today({ leads, instructors, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial }: {
   leads: Lead[]
   instructors: Instructor[]
   trialOpenings: TrialOpening[]
@@ -653,6 +696,7 @@ function Today({ leads, instructors, trialOpenings, messageTemplates, onSelect, 
   onOverrideSignature: (lead: Lead) => void
   onResolveFollowUp: (lead: Lead) => void
   onScheduleFollowUp: (id: string, note: string, atIso: string) => void
+  onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
 }) {
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
   const [callOutcomeLead, setCallOutcomeLead] = useState<Lead | null>(null)
@@ -721,7 +765,7 @@ function Today({ leads, instructors, trialOpenings, messageTemplates, onSelect, 
       })}{!upcomingDays.length && <div className="today-complete"><strong>No upcoming outreach scheduled</strong><span>New leads and future cadence dates will appear here.</span></div>}</div>
     </section>
     {trialPrompt && <TrialPromptModal prompt={trialPrompt} instructors={instructors} onClose={() => setTrialPrompt(null)} onConfirmYes={(occurredAt) => { onResolveTrialYes(trialPrompt.lead, trialPrompt.reason, occurredAt); setTrialPrompt(null) }} onConfirmNo={(comment) => { onResolveTrialNo(trialPrompt.lead, comment); setTrialPrompt(null) }} onConfirmSecondTrial={(instructorId, occurredAt) => { onResolveSecondTrial(trialPrompt.lead, instructorId, occurredAt); setTrialPrompt(null) }} />}
-    {callOutcomeLead && <CallOutcomeModal lead={callOutcomeLead} onClose={() => setCallOutcomeLead(null)} onSubmit={(outcome) => { onLog(callOutcomeLead.id, 'call', outcome); setCallOutcomeLead(null) }} onScheduleFollowUp={(note, atIso) => onScheduleFollowUp(callOutcomeLead.id, note, atIso)} />}
+    {callOutcomeLead && <CallOutcomeModal lead={callOutcomeLead} instructors={instructors} onClose={() => setCallOutcomeLead(null)} onSubmit={(outcome) => { onLog(callOutcomeLead.id, 'call', outcome); setCallOutcomeLead(null) }} onScheduleFollowUp={(note, atIso) => onScheduleFollowUp(callOutcomeLead.id, note, atIso)} onBookTrial={onBookTrial} />}
   </>
 }
 
@@ -899,7 +943,14 @@ function ActivityLog({ leads, instruments, instructors, scheduleActivities, onSe
     }, 10_000)
     setPendingDeletions((current) => [...current, { key, label, timerId }])
   }
-  const remove = (leadId: string, activityId: string) => queueDeletion(`lead-${activityId}`, 'Activity deleted', () => onDelete(leadId, activityId))
+  const remove = (leadId: string, activityId: string, activityType: ActivityType, leadName: string) => {
+    if (activityType === 'lead_created') {
+      if (!window.confirm(`This is ${leadName}'s founding record. Deleting it will permanently delete ${leadName} and their entire history, since they were never really added. Continue?`)) return
+      queueDeletion(`lead-${activityId}`, `${leadName} deleted`, () => onDelete(leadId, activityId))
+      return
+    }
+    queueDeletion(`lead-${activityId}`, 'Activity deleted', () => onDelete(leadId, activityId))
+  }
   const removeSchedule = (id: string) => {
     queueDeletion(`schedule-${id}`, 'Schedule log deleted', () => onDeleteSchedule(id))
   }
@@ -921,7 +972,7 @@ function ActivityLog({ leads, instruments, instructors, scheduleActivities, onSe
         <time>{formatDate(entry.activity.occurredAt)}</time>
         <div className="activity-row-actions"><button className="edit-action" onClick={() => (entry.activity.type === 'call' || entry.activity.type === 'text' || entry.activity.type === 'note' || entry.activity.type === 'email')
           ? setActivityEditor({ leadId: entry.lead.id, activityId: entry.activity.id, type: entry.activity.type as ManualActivityType, occurredAt: entry.activity.occurredAt, outcome: entry.activity.outcome })
-          : setSimpleEditor({ leadId: entry.lead.id, activityId: entry.activity.id, typeLabel: entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.type === 'lead_created' ? 'New lead received' : 'Lead information updated', occurredAt: entry.activity.occurredAt, outcome: entry.activity.outcome })}>Edit</button><button className="delete-action" onClick={() => remove(entry.lead.id, entry.activity.id)} aria-label={`Delete ${entry.activity.type} for ${entry.lead.name}`}>Delete</button></div>
+          : setSimpleEditor({ leadId: entry.lead.id, activityId: entry.activity.id, typeLabel: entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.type === 'lead_created' ? 'New lead received' : 'Lead information updated', occurredAt: entry.activity.occurredAt, outcome: entry.activity.outcome })}>Edit</button><button className="delete-action" onClick={() => remove(entry.lead.id, entry.activity.id, entry.activity.type, entry.lead.name)} aria-label={`Delete ${entry.activity.type} for ${entry.lead.name}`}>Delete</button></div>
       </article> : <article className="activity-row" key={`schedule-${entry.activity.id}`}>
         <div className="activity-icon schedule">◫</div>
         <div className="activity-person static"><strong>{entry.activity.studentName ?? entry.activity.instructor}</strong><span>{entry.activity.studentName ? `${entry.activity.instructor} · Instructor schedule` : 'Instructor schedule'}</span></div>
@@ -1333,11 +1384,45 @@ function Settings({ instruments, leads, instructors, availability, entries, open
 
 function MessageTemplateEditor({ template, value, onSave, onReset }: { template: { key: string; label: string; variables: string[] }; value: string; onSave: (value: string) => void; onReset: () => void }) {
   const [draft, setDraft] = useState(value)
+  const [suggest, setSuggest] = useState<{ query: string; start: number } | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => setDraft(value), [value])
   const dirty = draft !== value
+
+  const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const next = event.target.value
+    setDraft(next)
+    const cursor = event.target.selectionStart
+    const match = next.slice(0, cursor).match(/\{\{(\w*)$/)
+    setSuggest(match ? { query: match[1], start: cursor - match[0].length } : null)
+  }
+
+  const insertVariable = (name: string) => {
+    if (!suggest) return
+    const insertText = `{{${name}}}`
+    const cursor = suggest.start + suggest.query.length + 2
+    const next = draft.slice(0, suggest.start) + insertText + draft.slice(cursor)
+    setDraft(next)
+    setSuggest(null)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      const pos = suggest.start + insertText.length
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
+  const matches = suggest ? template.variables.filter((item) => item.toLowerCase().startsWith(suggest.query.toLowerCase())) : []
+
   return <div className="template-editor">
     <div className="template-editor-head"><strong>{template.label}</strong><small>Variables: {template.variables.map((item) => `{{${item}}}`).join(', ')}</small></div>
-    <textarea rows={5} value={draft} onChange={(event) => setDraft(event.target.value)} />
+    <div className="template-editor-textarea-wrap">
+      <textarea ref={textareaRef} rows={5} value={draft} onChange={handleChange} onBlur={() => window.setTimeout(() => setSuggest(null), 150)} />
+      {suggest && matches.length > 0 && <div className="template-suggest">
+        {matches.map((name) => <button type="button" key={name} onMouseDown={(event) => { event.preventDefault(); insertVariable(name) }}>{`{{${name}}}`}</button>)}
+      </div>}
+    </div>
     <div className="template-editor-actions">
       <button type="button" className="secondary" disabled={!dirty} onClick={() => setDraft(value)}>Cancel</button>
       <button type="button" className="secondary" onClick={onReset}>Reset to default</button>
