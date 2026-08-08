@@ -4,7 +4,7 @@ import { nurtureWeekFor } from './cadence'
 export function nurtureMessageFor(lead: Lead, contactAt: Date, hasOpenings = false) {
   const week = nurtureWeekFor(lead, contactAt)
   const name = lead.name.split(' ')[0]
-  const instrument = lead.instrument.toLowerCase()
+  const instrument = lead.instruments.map((item) => item.toLowerCase()).join(' and ')
 
   if (week <= 2) return {
     label: 'Week 2 · Call, then text',

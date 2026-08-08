@@ -56,7 +56,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       studentName: row.student_name ?? undefined,
       phone: row.phone ?? '',
       email: row.email ?? '',
-      instrument: row.instrument,
+      instruments: row.instruments?.length ? row.instruments : (row.instrument ? [row.instrument] : []),
       receivedAt: row.received_at,
       source: row.source,
       campaign: row.campaign ?? '',
@@ -66,6 +66,9 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       holdFormComplete: Boolean(row.hold_form_complete),
       trialAttended: Boolean(row.trial_attended),
       enrolledAt: row.enrolled_at ?? undefined,
+      enrollmentAgreementSigned: Boolean(row.enrollment_agreement_signed),
+      followUpAt: row.follow_up_at ?? undefined,
+      followUpNote: row.follow_up_note ?? undefined,
     })),
     instructors,
     availability: (availabilityResult.data ?? []).map((row) => ({
@@ -113,7 +116,8 @@ const leadRow = (lead: Lead) => ({
   student_name: lead.studentName ?? null,
   phone: lead.phone || null,
   email: lead.email,
-  instrument: lead.instrument,
+  instrument: lead.instruments[0] ?? '',
+  instruments: lead.instruments,
   received_at: lead.receivedAt,
   source: lead.source,
   campaign: lead.campaign || null,
@@ -122,6 +126,9 @@ const leadRow = (lead: Lead) => ({
   hold_form_complete: lead.holdFormComplete,
   trial_attended: lead.trialAttended,
   enrolled_at: lead.enrolledAt ?? null,
+  enrollment_agreement_signed: lead.enrollmentAgreementSigned ?? false,
+  follow_up_at: lead.followUpAt ?? null,
+  follow_up_note: lead.followUpNote ?? null,
 })
 
 export async function saveLead(lead: Lead) {
@@ -136,6 +143,9 @@ export async function updateLead(id: string, update: Partial<Lead>) {
   if ('holdFormComplete' in update) row.hold_form_complete = update.holdFormComplete
   if ('trialAttended' in update) row.trial_attended = update.trialAttended
   if ('enrolledAt' in update) row.enrolled_at = update.enrolledAt ?? null
+  if ('enrollmentAgreementSigned' in update) row.enrollment_agreement_signed = update.enrollmentAgreementSigned
+  if ('followUpAt' in update) row.follow_up_at = update.followUpAt ?? null
+  if ('followUpNote' in update) row.follow_up_note = update.followUpNote ?? null
   const { error } = await client().from('leads').update(row).eq('id', id)
   assertOk(error)
 }

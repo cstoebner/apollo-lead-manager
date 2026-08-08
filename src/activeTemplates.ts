@@ -2,7 +2,7 @@ import type { Lead } from './types'
 import { activeCadenceState } from './cadence'
 
 const firstName = (lead: Lead) => lead.name.split(' ')[0]
-const instrumentName = (lead: Lead) => lead.instrument.toLowerCase()
+const instrumentName = (lead: Lead) => lead.instruments.map((item) => item.toLowerCase()).join(' and ')
 export function activeFollowUpFor(lead: Lead) {
   const textCount = Math.min(activeCadenceState(lead).stage, 3)
   const name = firstName(lead)

@@ -14,7 +14,7 @@ export interface Lead {
   studentName?: string
   phone: string
   email: string
-  instrument: string
+  instruments: string[]
   receivedAt: string
   source: string
   campaign: string
@@ -24,6 +24,9 @@ export interface Lead {
   holdFormComplete: boolean
   trialAttended: boolean
   enrolledAt?: string
+  enrollmentAgreementSigned?: boolean
+  followUpAt?: string
+  followUpNote?: string
 }
 
 export interface DayWindow {
