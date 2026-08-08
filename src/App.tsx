@@ -78,9 +78,19 @@ function App() {
   return isSupabaseConfigured ? <AuthenticatedApp /> : <Workspace />
 }
 
+function parseAuthHashError() {
+  const hash = window.location.hash
+  if (!hash.includes('error=')) return ''
+  const params = new URLSearchParams(hash.slice(1))
+  const description = params.get('error_description')
+  window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  return description ? description.replace(/\+/g, ' ') : 'That link is invalid or has expired.'
+}
+
 function AuthenticatedApp() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
   const [recovery, setRecovery] = useState(false)
+  const [authLinkError, setAuthLinkError] = useState(() => parseAuthHashError())
 
   useEffect(() => {
     void supabase!.auth.getSession().then(({ data }) => setSession(data.session))
@@ -93,20 +103,21 @@ function AuthenticatedApp() {
 
   if (session === undefined) return <AppLoading message="Checking your secure session…" />
   if (recovery) return <SetNewPassword onDone={() => setRecovery(false)} />
-  if (!session) return <Login />
+  if (!session) return <Login initialError={authLinkError} onDismissInitialError={() => setAuthLinkError('')} />
   return <Workspace onSignOut={() => { void supabase!.auth.signOut() }} />
 }
 
-function Login() {
+function Login({ initialError, onDismissInitialError }: { initialError: string; onDismissInitialError: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [forgotMode, setForgotMode] = useState(false)
+  const [forgotMode, setForgotMode] = useState(Boolean(initialError))
   const [resetEmail, setResetEmail] = useState('')
   const [resetSent, setResetSent] = useState(false)
   const [resetSubmitting, setResetSubmitting] = useState(false)
   const [resetError, setResetError] = useState('')
+  const [linkError, setLinkError] = useState(initialError)
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -118,7 +129,7 @@ function Login() {
 
   const submitReset = async (event: React.FormEvent) => {
     event.preventDefault()
-    setResetSubmitting(true); setResetError('')
+    setResetSubmitting(true); setResetError(''); setLinkError('')
     const { error: resetErr } = await supabase!.auth.resetPasswordForEmail(resetEmail.trim(), { redirectTo: window.location.origin })
     if (resetErr) setResetError(resetErr.message)
     else setResetSent(true)
@@ -129,12 +140,13 @@ function Login() {
     return <main className="welcome-shell"><form className="welcome-card login-card" onSubmit={submitReset}>
       <img className="brand-mark" src={apolloIcon} alt="Apollo" /><p className="eyebrow">Apollo Music Academy</p><h1>Reset your password.</h1>
       {resetSent ? <p className="welcome-copy">Check {resetEmail} for a link to set a new password.</p> : <>
+        {linkError && <p className="auth-error">{linkError} Request a new link below.</p>}
         <p className="welcome-copy">Enter your email and we’ll send you a link to set a new password.</p>
         <label className="field">Email<input required type="email" autoComplete="email" value={resetEmail} onChange={(event) => setResetEmail(event.target.value)} autoFocus /></label>
         {resetError && <p className="auth-error">{resetError}</p>}
         <button className="primary jumbo full" disabled={resetSubmitting}>{resetSubmitting ? 'Sending…' : 'Send reset link'}</button>
       </>}
-      <button type="button" className="forgot-password-link" onClick={() => { setForgotMode(false); setResetSent(false); setResetError('') }}>← Back to sign in</button>
+      <button type="button" className="forgot-password-link" onClick={() => { setForgotMode(false); setResetSent(false); setResetError(''); setLinkError(''); onDismissInitialError() }}>← Back to sign in</button>
     </form></main>
   }
 
