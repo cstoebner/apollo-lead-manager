@@ -42,19 +42,21 @@ export function activeCadenceState(lead: Lead): OutreachProgress {
   return { stage, complete: stage >= OFFSETS.length, callLogged, textLogged, lastCompletedAt, partialAt: latestPartial }
 }
 
-export function nurtureStartedAt(lead: Lead) {
+type NurtureAnchor = Pick<Lead, 'receivedAt' | 'activities'>
+
+export function nurtureStartedAt(lead: NurtureAnchor) {
   const statusChange = [...lead.activities].reverse().find((activity) =>
     activity.type === 'status_change' && activity.outcome.includes('to Nurture'),
   )
   return statusChange ? new Date(statusChange.occurredAt) : new Date(lead.receivedAt)
 }
 
-export function nurtureWeekFor(lead: Lead, contactAt: Date) {
+export function nurtureWeekFor(lead: NurtureAnchor, contactAt: Date) {
   const elapsedWeeks = Math.max(2, (contactAt.getTime() - nurtureStartedAt(lead).getTime()) / DAY / 7)
   return Math.ceil(elapsedWeeks / 2) * 2
 }
 
-export function nurtureRequiresCall(lead: Lead, contactAt: Date) {
+export function nurtureRequiresCall(lead: NurtureAnchor, contactAt: Date) {
   const week = nurtureWeekFor(lead, contactAt)
   return week <= 2 || (week > 4 && week <= 6) || (week > 8 && week <= 10)
 }

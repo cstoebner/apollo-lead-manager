@@ -9,6 +9,7 @@ export interface WorkspaceData {
   openings: TrialOpening[]
   scheduleActivities: ScheduleActivity[]
   instruments?: string[]
+  messageTemplates?: Record<string, string>
 }
 
 const client = () => {
@@ -107,6 +108,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       studentName: row.student_name ?? undefined,
     })),
     instruments: settingsResult.data?.offered_instruments ?? undefined,
+    messageTemplates: settingsResult.data?.message_templates ?? undefined,
   }
 }
 
@@ -265,5 +267,14 @@ export async function saveSettings(instruments: string[]) {
   assertOk(userError)
   if (!user) throw new Error('You are not signed in.')
   const { error } = await db.from('app_settings').upsert({ owner_id: user.id, offered_instruments: instruments }, { onConflict: 'owner_id' })
+  assertOk(error)
+}
+
+export async function saveMessageTemplates(templates: Record<string, string>) {
+  const db = client()
+  const { data: { user }, error: userError } = await db.auth.getUser()
+  assertOk(userError)
+  if (!user) throw new Error('You are not signed in.')
+  const { error } = await db.from('app_settings').upsert({ owner_id: user.id, message_templates: templates }, { onConflict: 'owner_id' })
   assertOk(error)
 }
