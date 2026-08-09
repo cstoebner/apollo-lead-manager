@@ -197,7 +197,6 @@ export function nextNurtureContact(lead: Lead, availability: Availability, now =
   const intervalDays = 14
   if (progress.partialAt) return {
     at: now,
-    channel: 'call' as const,
     reason: 'Finish this nurture step',
   }
   const anchor = progress.lastCompletedAt ?? nurtureStartedAt(lead).getTime()
@@ -207,7 +206,6 @@ export function nextNurtureContact(lead: Lead, availability: Availability, now =
 
   return {
     at: findAvailableTime(target, availability, false),
-    channel: 'call' as const,
     reason: lead.status === 'nurture_long_term' ? '2-week long-term nurture' : '2-week nurture',
   }
 }
