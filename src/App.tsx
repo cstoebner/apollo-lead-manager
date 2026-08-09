@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import apolloIcon from './assets/apollo-icon.png'
 import apolloLogoFull from './assets/apollo-logo-full.png'
@@ -606,7 +606,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -634,7 +634,59 @@ function lastCallNote(lead: Lead) {
   return call.outcome
 }
 
-function CallOutcomeModal({ lead, instructors, onClose, onSubmit, onScheduleFollowUp, onBookTrial }: { lead: Lead; instructors: Instructor[]; onClose: () => void; onSubmit: (outcome: string) => void; onScheduleFollowUp: (note: string, atIso: string) => void; onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean }) {
+function MiniAvailabilityCalendar({ instructor, availability, entries, durationMinutes, selectedIso, onSelect }: {
+  instructor: Instructor
+  availability: InstructorAvailability[]
+  entries: ScheduleEntry[]
+  durationMinutes: number
+  selectedIso: string
+  onSelect: (iso: string) => void
+}) {
+  const [weekStart, setWeekStart] = useState(() => startOfScheduleWeek(new Date()))
+  const now = new Date()
+  const days = scheduleDays.map((_, index) => datePlusDays(weekStart, index))
+  const allWindows = days.flatMap((date) => availability.filter((item) => item.instructorId === instructor.id && item.dayOfWeek === date.getDay()))
+  const minStart = allWindows.length ? Math.min(...allWindows.map((item) => timeMinutes(item.startTime))) : null
+  const maxEnd = allWindows.length ? Math.max(...allWindows.map((item) => timeMinutes(item.endTime))) : null
+  const rows: string[] = []
+  if (minStart !== null && maxEnd !== null) {
+    for (let minute = minStart; minute < maxEnd; minute += 15) rows.push(`${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`)
+  }
+  const canGoBack = weekStart > startOfScheduleWeek(now)
+  const slotIsOccupied = (date: Date, time: string) => {
+    const start = timeMinutes(time)
+    for (let minute = start; minute < start + durationMinutes; minute += 15) {
+      const check = `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+      if (entryOccupyingSlot(entries, instructor.id, date, check)) return true
+    }
+    return false
+  }
+
+  return <div className="mini-calendar">
+    <div className="mini-calendar-nav">
+      <button type="button" className="secondary" disabled={!canGoBack} onClick={() => setWeekStart((current) => datePlusDays(current, -7))}>←</button>
+      <strong>{weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – {datePlusDays(weekStart, 5).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong>
+      <button type="button" className="secondary" onClick={() => setWeekStart((current) => datePlusDays(current, 7))}>→</button>
+    </div>
+    {!rows.length ? <p className="muted">{instructor.name} has no availability windows configured.</p> : <div className="mini-calendar-scroll"><div className="mini-calendar-grid">
+      <div className="mini-calendar-corner" />
+      {days.map((date) => <div className="mini-calendar-daylabel" key={date.toISOString()}>{date.toLocaleDateString('en-US', { weekday: 'short' })}<small>{date.getMonth() + 1}/{date.getDate()}</small></div>)}
+      {rows.map((time) => <Fragment key={time}>
+        <div className="mini-calendar-time">{formatClock(time)}</div>
+        {days.map((date) => {
+          const fits = lessonFitsAvailability(availability, instructor.id, date.getDay(), time, durationMinutes)
+          const past = dateAtTime(date, time) < now
+          const open = fits && !past && !slotIsOccupied(date, time)
+          const iso = dateAtTime(date, time).toISOString()
+          const isSelected = Boolean(selectedIso) && new Date(selectedIso).getTime() === dateAtTime(date, time).getTime()
+          return <button type="button" key={`${localDateKey(date)}-${time}`} disabled={!open} className={`mini-calendar-slot${open ? ' open' : ''}${isSelected ? ' selected' : ''}`} title={open ? `${date.toLocaleDateString('en-US')} ${formatClock(time)}` : undefined} onClick={() => onSelect(iso)} />
+        })}
+      </Fragment>)}
+    </div></div>}
+  </div>
+}
+
+function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleEntries, onClose, onSubmit, onScheduleFollowUp, onBookTrial }: { lead: Lead; instructors: Instructor[]; instructorAvailability: InstructorAvailability[]; scheduleEntries: ScheduleEntry[]; onClose: () => void; onSubmit: (outcome: string) => void; onScheduleFollowUp: (note: string, atIso: string) => void; onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean }) {
   const [answered, setAnswered] = useState<boolean | null>(null)
   const [note, setNote] = useState('')
   const [wantsFollowUp, setWantsFollowUp] = useState(false)
@@ -672,6 +724,7 @@ function CallOutcomeModal({ lead, instructors, onClose, onSubmit, onScheduleFoll
             <label className="field">Trial date and time<input required type="datetime-local" value={trialDate} onChange={(event) => setTrialDate(event.target.value)} /></label>
             <label className="field">Length<select value={trialDuration} onChange={(event) => setTrialDuration(Number(event.target.value) as 30 | 45 | 60)}><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></label>
           </div>
+          {trialInstructorId && <MiniAvailabilityCalendar instructor={eligibleInstructors.find((item) => item.id === trialInstructorId)!} availability={instructorAvailability} entries={scheduleEntries} durationMinutes={trialDuration} selectedIso={trialDate ? new Date(trialDate).toISOString() : ''} onSelect={(iso) => setTrialDate(toDateTimeInput(new Date(iso)))} />}
           <small>This creates a real trial on that instructor's schedule.</small>
         </div>}
         <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={!note.trim() || (wantsTrial && !trialInstructorId)} onClick={submit}>Save</button></div>
@@ -680,9 +733,11 @@ function CallOutcomeModal({ lead, instructors, onClose, onSubmit, onScheduleFoll
   </div>
 }
 
-function Today({ leads, instructors, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial }: {
   leads: Lead[]
   instructors: Instructor[]
+  instructorAvailability: InstructorAvailability[]
+  scheduleEntries: ScheduleEntry[]
   trialOpenings: TrialOpening[]
   messageTemplates: Record<string, string>
   onSelect: (id: string) => void
@@ -765,7 +820,7 @@ function Today({ leads, instructors, trialOpenings, messageTemplates, onSelect, 
       })}{!upcomingDays.length && <div className="today-complete"><strong>No upcoming outreach scheduled</strong><span>New leads and future cadence dates will appear here.</span></div>}</div>
     </section>
     {trialPrompt && <TrialPromptModal prompt={trialPrompt} instructors={instructors} onClose={() => setTrialPrompt(null)} onConfirmYes={(occurredAt) => { onResolveTrialYes(trialPrompt.lead, trialPrompt.reason, occurredAt); setTrialPrompt(null) }} onConfirmNo={(comment) => { onResolveTrialNo(trialPrompt.lead, comment); setTrialPrompt(null) }} onConfirmSecondTrial={(instructorId, occurredAt) => { onResolveSecondTrial(trialPrompt.lead, instructorId, occurredAt); setTrialPrompt(null) }} />}
-    {callOutcomeLead && <CallOutcomeModal lead={callOutcomeLead} instructors={instructors} onClose={() => setCallOutcomeLead(null)} onSubmit={(outcome) => { onLog(callOutcomeLead.id, 'call', outcome); setCallOutcomeLead(null) }} onScheduleFollowUp={(note, atIso) => onScheduleFollowUp(callOutcomeLead.id, note, atIso)} onBookTrial={onBookTrial} />}
+    {callOutcomeLead && <CallOutcomeModal lead={callOutcomeLead} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} onClose={() => setCallOutcomeLead(null)} onSubmit={(outcome) => { onLog(callOutcomeLead.id, 'call', outcome); setCallOutcomeLead(null) }} onScheduleFollowUp={(note, atIso) => onScheduleFollowUp(callOutcomeLead.id, note, atIso)} onBookTrial={onBookTrial} />}
   </>
 }
 
