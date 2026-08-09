@@ -34,9 +34,9 @@ const statusLabels: Record<LeadStatus, string> = {
 const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
 function revertForActivity(activity: Activity): Partial<Lead> | undefined {
   if (activity.type === 'trial_update') {
-    if (/^(Trial lesson booked|Second trial lesson scheduled)/.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
-    if (activity.outcome.startsWith('Trial confirmation form completed')) return { holdFormComplete: false }
-    if (activity.outcome.startsWith('Trial lesson completed')) return { trialAttended: false }
+    if (/^(Trial lesson booked|Trial booked for|Second trial lesson scheduled)/.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
+    if (/^(Trial confirmation form completed|Booking form completed)/.test(activity.outcome)) return { holdFormComplete: false }
+    if (/^(Trial lesson completed|Trial marked completed)/.test(activity.outcome)) return { trialAttended: false }
   }
   if (activity.type === 'status_change' && activity.outcome.startsWith('Became an active student')) return { status: 'hot', enrolledAt: undefined }
   return undefined
@@ -582,6 +582,15 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     return true
   }
 
+  const clearTrial = (lead: Lead) => {
+    if (!window.confirm(`Clear ${lead.name}'s trial booking? This removes it from their record and cancels their slot on the instructor's calendar if one still exists.`)) return
+    const leadUpdate: Partial<Lead> = { trialAt: undefined, holdFormComplete: false, trialAttended: false }
+    const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome: 'Trial booking cleared' }
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item))
+    replaceEntries(scheduleEntries.filter((entry) => !(entry.leadId === lead.id && entry.kind === 'trial')))
+    persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)]))
+  }
+
   if (loadingData) return <AppLoading message="Loading your lead manager…" />
   if (dataError && !leads.length && !instructors.length) return <main className="app-loading error-loading"><strong>We couldn’t load your data.</strong><span>{dataError}</span><button className="primary" onClick={() => window.location.reload()}>Try again</button></main>
 
@@ -613,7 +622,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
       </main>
 
-      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} />}
+      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} />}
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
@@ -2066,7 +2075,7 @@ function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft
   </section></div>
 }
 
-function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp }: { lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void }) {
+function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp }: { lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void }) {
   const [editing, setEditing] = useState(false)
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
   const isActiveHotLead = lead.status === 'hot' && !lead.trialAt
@@ -2083,7 +2092,7 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, onClose
     <div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span>{messageTemplate && <><b>{messageTemplate.label}</b><small>{messageTemplate.message}</small></>}</div>
     {activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}
     <div className="drawer-actions"><button className="primary" onClick={() => onTextNow(lead, messageTemplate)}>↗ Text now</button>{(!messageTemplate || messageTemplate.callFirst) && <button className="secondary" disabled={cadenceProgress?.callLogged} onClick={() => onLog(lead.id, 'call')}>{cadenceProgress?.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button className="secondary" disabled={cadenceProgress?.textLogged} onClick={() => onLog(lead.id, 'text')}>{cadenceProgress?.textLogged ? '✓ Text logged' : '✓ Log text'}</button></div>
-    <TrialWorkflowEditor key={`${lead.id}-${lead.trialAt ?? 'none'}`} lead={lead} onTrialUpdate={onTrialUpdate} />
+    <TrialWorkflowEditor key={`${lead.id}-${lead.trialAt ?? 'none'}`} lead={lead} onTrialUpdate={onTrialUpdate} onClearTrial={onClearTrial} />
     <LeadNoteComposer onSave={(note) => onAddNote(lead.id, note)} />
     <FollowUpComposer lead={lead} onSchedule={(note, atIso) => onScheduleFollowUp(lead.id, note, atIso)} onResolve={() => onResolveFollowUp(lead)} />
     {notes.length > 0 && <><h3>Saved notes</h3><div className="profile-notes">{notes.map((note) => <article key={note.id}><p>{note.outcome}</p><small>{formatDate(note.occurredAt)}</small></article>)}</div></>}
@@ -2094,8 +2103,8 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, onClose
   </aside></div>{editing && <EditLeadModal lead={lead} instruments={instruments} onClose={() => setEditing(false)} onSave={(update) => { onUpdateLead(lead.id, update); setEditing(false) }} />}</>
 }
 
-function TrialWorkflowEditor({ lead, onTrialUpdate }: { lead: Lead; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void }) {
-  return <section className="trial-workflow"><div className="trial-workflow-head"><div><strong>Trial workflow</strong><small>{!lead.trialAt ? 'No trial booked' : lead.trialAttended ? 'Post-trial · waiting to book lessons' : lead.holdFormComplete ? 'Trial confirmed' : 'Trial booked · form pending'}</small></div></div>{lead.trialAt ? <div className="trial-booking-summary"><strong>{formatTrialTime(lead.trialAt)}</strong><small>Manage this booking from the Instructor Schedule.</small></div> : <p className="trial-schedule-guidance">Choose this lead from an instructor’s calendar to schedule their trial.</p>}{lead.trialAt && <div className="milestone-checks"><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onTrialUpdate(lead.id, { holdFormComplete: event.target.checked }, event.target.checked ? 'Booking form completed' : 'Booking form marked incomplete')} /> Booking form completed</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onTrialUpdate(lead.id, { trialAttended: event.target.checked }, event.target.checked ? 'Trial marked completed' : 'Trial marked not completed')} /> Trial completed</label></div>}</section>
+function TrialWorkflowEditor({ lead, onTrialUpdate, onClearTrial }: { lead: Lead; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void }) {
+  return <section className="trial-workflow"><div className="trial-workflow-head"><div><strong>Trial workflow</strong><small>{!lead.trialAt ? 'No trial booked' : lead.trialAttended ? 'Post-trial · waiting to book lessons' : lead.holdFormComplete ? 'Trial confirmed' : 'Trial booked · form pending'}</small></div></div>{lead.trialAt ? <div className="trial-booking-summary"><strong>{formatTrialTime(lead.trialAt)}</strong><small>Manage this booking from the Instructor Schedule.</small></div> : <p className="trial-schedule-guidance">Choose this lead from an instructor’s calendar to schedule their trial.</p>}{lead.trialAt && <div className="milestone-checks"><label><input type="checkbox" checked={lead.holdFormComplete} onChange={(event) => onTrialUpdate(lead.id, { holdFormComplete: event.target.checked }, event.target.checked ? 'Booking form completed' : 'Booking form marked incomplete')} /> Booking form completed</label><label><input type="checkbox" checked={lead.trialAttended} onChange={(event) => onTrialUpdate(lead.id, { trialAttended: event.target.checked }, event.target.checked ? 'Trial marked completed' : 'Trial marked not completed')} /> Trial completed</label></div>}{lead.trialAt && <button type="button" className="clear-trial-button" onClick={() => onClearTrial(lead)}>✕ Clear trial (not actually booked)</button>}</section>
 }
 
 function LeadNoteComposer({ onSave }: { onSave: (note: string) => void }) {
