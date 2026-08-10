@@ -34,7 +34,7 @@ const statusLabels: Record<LeadStatus, string> = {
 const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
 function revertForActivity(activity: Activity): Partial<Lead> | undefined {
   if (activity.type === 'trial_update') {
-    if (/^(Trial lesson booked|Trial booked for|Second trial lesson scheduled)/.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
+    if (/^(Trial lesson booked|Trial booked for|Trial rescheduled to|Second trial lesson scheduled)/.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
     if (/^(Trial confirmation form completed|Booking form completed)/.test(activity.outcome)) return { holdFormComplete: false }
     if (/^(Trial lesson completed|Trial marked completed)/.test(activity.outcome)) return { trialAttended: false }
   }
