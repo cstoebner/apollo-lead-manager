@@ -913,11 +913,16 @@ function TrialPromptModal({ prompt, instructors, onClose, onConfirmYes, onConfir
 function LeadTable({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) => void }) {
   const [sortKey, setSortKey] = useState<LeadSortKey>('receivedAt')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [query, setQuery] = useState('')
   const changeSort = (key: LeadSortKey) => {
     if (sortKey === key) setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDirection(key === 'receivedAt' || key === 'touches' ? 'desc' : 'asc') }
   }
-  const sortedLeads = useMemo(() => [...leads].sort((a, b) => {
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredLeads = normalizedQuery
+    ? leads.filter((lead) => `${lead.name} ${lead.studentName ?? ''} ${lead.instruments.join(' ')} ${lead.source} ${lead.campaign}`.toLowerCase().includes(normalizedQuery))
+    : leads
+  const sortedLeads = useMemo(() => [...filteredLeads].sort((a, b) => {
     const comparison = sortKey === 'receivedAt' ? Date.parse(a.receivedAt) - Date.parse(b.receivedAt)
       : sortKey === 'touches' ? touchCount(a) - touchCount(b)
         : sortKey === 'status' ? statusLabels[a.status].localeCompare(statusLabels[b.status], undefined, { sensitivity: 'base' })
@@ -925,10 +930,11 @@ function LeadTable({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) 
             : a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
     const directed = sortDirection === 'asc' ? comparison : -comparison
     return directed || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-  }), [leads, sortKey, sortDirection])
+  }), [filteredLeads, sortKey, sortDirection])
   const sortHeader = (key: LeadSortKey, label: string) => <th aria-sort={sortKey === key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}><button type="button" className={sortKey === key ? 'sort-button active' : 'sort-button'} onClick={() => changeSort(key)}>{label}<span>{sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
-  return <section className="card"><div className="section-head"><div><h2>Lead directory</h2><p>{leads.length} total leads in this workspace</p></div><input className="search" placeholder="Search leads" /></div>
+  return <section className="card"><div className="section-head"><div><h2>Lead directory</h2><p>{sortedLeads.length} of {leads.length} leads in this workspace</p></div><input className="search" placeholder="Search leads" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
     <div className="table-wrap"><table><thead><tr>{sortHeader('name', 'Lead')}{sortHeader('receivedAt', 'Received')}{sortHeader('source', 'Source')}{sortHeader('touches', 'Touches')}{sortHeader('status', 'Status')}</tr></thead><tbody>{sortedLeads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.name}</strong><small>{leadInstrumentLabel(lead)}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{touchCount(lead)}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
+    {!sortedLeads.length && <p className="muted" style={{ padding: '18px 24px' }}>No leads match "{query}".</p>}
   </section>
 }
 
