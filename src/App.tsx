@@ -766,6 +766,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   const [callOutcomeLead, setCallOutcomeLead] = useState<Lead | null>(null)
   const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt)
   const pending: PendingActionItem[] = leads.flatMap<PendingActionItem>((lead) => {
+    if (lead.status === 'unresponsive' || lead.status === 'nurture_long_term') return []
     const items: PendingActionItem[] = []
     if (lead.trialAt && !lead.holdFormComplete && lead.status !== 'unenrolled') {
       items.push({ lead, reason: 'booking_form', action: 'Booking form complete?', template: trialFormReminderFor(lead, messageTemplates) })
@@ -783,7 +784,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     }
     return items
   })
-  const nurture = leads.filter((lead) => lead.status === 'nurture' || lead.status === 'nurture_long_term')
+  const nurture = leads.filter((lead) => lead.status === 'nurture')
   const planned = useMemo(() => [
     ...active.map((lead) => ({ lead, kind: 'active' as const, recommendation: nextContact(lead, defaultAvailability), template: activeFollowUpFor(lead, messageTemplates), progress: activeCadenceState(lead) })),
     ...nurture.map((lead) => {
