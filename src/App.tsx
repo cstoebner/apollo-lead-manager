@@ -1274,9 +1274,9 @@ function CadenceInsertModal({ leads, instruments, instructors, onClose, onSave, 
     }
     if (trialBookedAt) {
       const bookingLead = createdLead ?? lead
-      if (!bookingLead || !trialInstructorId) return
+      if (!bookingLead) return
       const iso = new Date(trialBookedAt).toISOString()
-      if (!onBookTrial(bookingLead, trialInstructorId, iso)) return
+      if (trialInstructorId && !onBookTrial(bookingLead, trialInstructorId, iso)) return
       activities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: iso, outcome: `Trial lesson booked for ${formatTrialTime(iso)} (backfilled)` })
       leadUpdate.trialAt = iso
     }
@@ -1294,7 +1294,7 @@ function CadenceInsertModal({ leads, instruments, instructors, onClose, onSave, 
 
   const personValid = personMode === 'existing' ? Boolean(lead) : Boolean(newName.trim() && newInstruments.length)
   const outreachFilled = track === 'active' ? anyStepFilled : track === 'nurture' ? Boolean(nurtureDate) : false
-  const canSave = personValid && (outreachFilled || anyTrialFilled) && (!trialBookedAt || Boolean(trialInstructorId))
+  const canSave = personValid && (outreachFilled || anyTrialFilled)
 
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal cadence-insert-modal">
     <button type="button" className="close" onClick={onClose}>×</button>
@@ -1354,7 +1354,7 @@ function CadenceInsertModal({ leads, instruments, instructors, onClose, onSave, 
       <p className="muted">Optional — backfill any of these that already happened, in order.</p>
       {trialAlreadyBooked ? <div className="cadence-already-done">✓ Trial already booked for {formatTrialTime(lead!.trialAt!)}</div>
         : <label className="field">Trial lesson booked for<input type="datetime-local" value={trialBookedAt} onChange={(event) => setTrialBookedAt(event.target.value)} /></label>}
-      {trialBookedAt && <label className="field event-highlight">Instructor<select required value={trialInstructorId} onChange={(event) => setTrialInstructorId(event.target.value)}><option value="">Choose an instructor</option>{eligibleInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><small>This creates a real trial on that instructor's schedule.</small></label>}
+      {trialBookedAt && <label className="field event-highlight">Instructor <small>Optional</small><select value={trialInstructorId} onChange={(event) => setTrialInstructorId(event.target.value)}><option value="">Don't add this to an instructor's calendar</option>{eligibleInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><small>Only needed if you also want this reflected on that instructor's schedule.</small></label>}
       {formAlreadyComplete ? <div className="cadence-already-done">✓ Trial confirmation form already completed</div>
         : <label className="field">Trial confirmation form completed<input type="datetime-local" disabled={!canFillForm} value={trialFormDate} max={toDateTimeInput(new Date())} onChange={(event) => setTrialFormDate(event.target.value)} /></label>}
       {trialAlreadyAttended ? <div className="cadence-already-done">✓ Trial lesson already completed</div>
