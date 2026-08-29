@@ -27,6 +27,7 @@ export interface Lead {
   enrollmentAgreementSigned?: boolean
   followUpAt?: string
   followUpNote?: string
+  householdId?: string
 }
 
 export interface DayWindow {

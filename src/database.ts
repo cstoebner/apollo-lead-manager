@@ -70,6 +70,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       enrollmentAgreementSigned: Boolean(row.enrollment_agreement_signed),
       followUpAt: row.follow_up_at ?? undefined,
       followUpNote: row.follow_up_note ?? undefined,
+      householdId: row.household_id ?? undefined,
     })),
     instructors,
     availability: (availabilityResult.data ?? []).map((row) => ({
@@ -131,6 +132,7 @@ const leadRow = (lead: Lead) => ({
   enrollment_agreement_signed: lead.enrollmentAgreementSigned ?? false,
   follow_up_at: lead.followUpAt ?? null,
   follow_up_note: lead.followUpNote ?? null,
+  household_id: lead.householdId ?? null,
 })
 
 export async function saveLead(lead: Lead) {
@@ -148,6 +150,7 @@ export async function updateLead(id: string, update: Partial<Lead>) {
   if ('enrollmentAgreementSigned' in update) row.enrollment_agreement_signed = update.enrollmentAgreementSigned
   if ('followUpAt' in update) row.follow_up_at = update.followUpAt ?? null
   if ('followUpNote' in update) row.follow_up_note = update.followUpNote ?? null
+  if ('householdId' in update) row.household_id = update.householdId ?? null
   const { error } = await client().from('leads').update(row).eq('id', id)
   assertOk(error)
 }

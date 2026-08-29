@@ -242,6 +242,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [quickNoteId, setQuickNoteId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
+  const [siblingModalFor, setSiblingModalFor] = useState<Lead | null>(null)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
   const [pendingUndos, setPendingUndos] = useState<{ key: string; label: string; timerId: number; leadId?: string; revert: () => void }[]>([])
   const selected = leads.find((lead) => lead.id === selectedId)
@@ -302,6 +303,19 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     const next = { ...lead, activities: [activity] }
     setLeads((current) => [next, ...current])
     await createLeadRemote(lead, activity)
+  }
+  const addSibling = (parent: Lead, input: { studentName: string; instruments: string[]; receivedAt: string }) => {
+    const householdId = parent.householdId ?? crypto.randomUUID()
+    const activity: Activity = { id: crypto.randomUUID(), type: 'lead_created', occurredAt: input.receivedAt, outcome: `New lead received (sibling of ${parent.studentName ?? parent.name})` }
+    const sibling: Lead = {
+      id: crypto.randomUUID(), name: parent.name, studentName: input.studentName.trim() || undefined, phone: parent.phone, email: parent.email,
+      instruments: input.instruments, receivedAt: input.receivedAt, source: parent.source, campaign: parent.campaign, status: 'hot',
+      activities: [activity], holdFormComplete: false, trialAttended: false, householdId,
+    }
+    setLeads((current) => [sibling, ...(parent.householdId ? current : current.map((item) => item.id === parent.id ? { ...item, householdId } : item))])
+    void createLeadRemote(sibling, activity)
+    if (!parent.householdId) persist(updateLead(parent.id, { householdId }))
+    setSiblingModalFor(null)
   }
   const updateLeadInfo = (id: string, update: Partial<Lead>) => {
     const lead = leads.find((item) => item.id === id)
@@ -622,8 +636,9 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
       </main>
 
-      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} />}
+      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} />}
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
+      {siblingModalFor && <AddSiblingModal parent={siblingModalFor} instruments={offeredInstruments} onClose={() => setSiblingModalFor(null)} onSave={(input) => addSibling(siblingModalFor, input)} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
       {pendingUndos.length > 0 && <div className="undo-toast" role="status"><span>{pendingUndos[pendingUndos.length - 1].label}. Saving in 10 seconds.</span><button onClick={() => undoPending(pendingUndos[pendingUndos.length - 1].key)}>Undo</button></div>}
@@ -933,7 +948,7 @@ function LeadTable({ leads, onSelect }: { leads: Lead[]; onSelect: (id: string) 
   }), [filteredLeads, sortKey, sortDirection])
   const sortHeader = (key: LeadSortKey, label: string) => <th aria-sort={sortKey === key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}><button type="button" className={sortKey === key ? 'sort-button active' : 'sort-button'} onClick={() => changeSort(key)}>{label}<span>{sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span></button></th>
   return <section className="card"><div className="section-head"><div><h2>Lead directory</h2><p>{sortedLeads.length} of {leads.length} leads in this workspace</p></div><input className="search" placeholder="Search leads" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-    <div className="table-wrap"><table><thead><tr>{sortHeader('name', 'Lead')}{sortHeader('receivedAt', 'Received')}{sortHeader('source', 'Source')}{sortHeader('touches', 'Touches')}{sortHeader('status', 'Status')}</tr></thead><tbody>{sortedLeads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.name}</strong><small>{leadInstrumentLabel(lead)}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{touchCount(lead)}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
+    <div className="table-wrap"><table><thead><tr>{sortHeader('name', 'Lead')}{sortHeader('receivedAt', 'Received')}{sortHeader('source', 'Source')}{sortHeader('touches', 'Touches')}{sortHeader('status', 'Status')}</tr></thead><tbody>{sortedLeads.map((lead) => <tr key={lead.id} onClick={() => onSelect(lead.id)}><td><strong>{lead.studentName ?? lead.name}</strong><small>{lead.studentName ? `${lead.name} · ` : ''}{leadInstrumentLabel(lead)}</small></td><td>{formatDate(lead.receivedAt)}</td><td>{lead.source}<small>{lead.campaign}</small></td><td>{touchCount(lead)}</td><td><span className={`status ${lead.status}`}>{statusLabels[lead.status]}</span></td></tr>)}</tbody></table></div>
     {!sortedLeads.length && <p className="muted" style={{ padding: '18px 24px' }}>No leads match "{query}".</p>}
   </section>
 }
@@ -2082,7 +2097,7 @@ function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft
   </section></div>
 }
 
-function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp }: { lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void }) {
+function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, siblings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp, onAddSibling, onSelectSibling }: { lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; siblings: Lead[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void; onAddSibling: () => void; onSelectSibling: (id: string) => void }) {
   const [editing, setEditing] = useState(false)
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
   const isActiveHotLead = lead.status === 'hot' && !lead.trialAt
@@ -2096,6 +2111,7 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, onClose
   return <><div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><aside className="drawer">
     <button className="close" onClick={onClose}>×</button><p className="eyebrow">Lead profile</p><h2>{lead.name}</h2>{lead.studentName && <p className="profile-student">Student: <strong>{lead.studentName}</strong></p>}<p className="muted">{leadInstrumentLabel(lead)} · {lead.phone}</p>
     <button className="edit-lead-button" onClick={() => setEditing(true)}>✎ Edit lead information</button>
+    <div className="household-section">{siblings.length > 0 && <div className="household-siblings"><small>Also in this household</small>{siblings.map((sibling) => <button type="button" key={sibling.id} className="household-sibling" onClick={() => onSelectSibling(sibling.id)}><strong>{sibling.studentName ?? sibling.name}</strong><small>{leadInstrumentLabel(sibling)} · {statusLabels[sibling.status]}</small></button>)}</div>}<button type="button" className="add-sibling-button" onClick={onAddSibling}>＋ Add another student</button></div>
     <div className="next-box"><small>Recommended next contact</small><strong>{recommendation.reason.includes('now') ? 'Call now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}</span>{messageTemplate && <><b>{messageTemplate.label}</b><small>{messageTemplate.message}</small></>}</div>
     {activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}
     <div className="drawer-actions"><button className="primary" onClick={() => onTextNow(lead, messageTemplate)}>↗ Text now</button>{(!messageTemplate || messageTemplate.callFirst) && <button className="secondary" disabled={cadenceProgress?.callLogged} onClick={() => onLog(lead.id, 'call')}>{cadenceProgress?.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button className="secondary" disabled={cadenceProgress?.textLogged} onClick={() => onLog(lead.id, 'text')}>{cadenceProgress?.textLogged ? '✓ Text logged' : '✓ Log text'}</button></div>
@@ -2156,6 +2172,20 @@ function NewLeadModal({ instruments, onClose, onSave }: { instruments: string[];
   const [source, setSource] = useState('Meta')
   const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date()))
   return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!leadInstruments.length) return; onSave({ id: crypto.randomUUID(), name: name.trim(), studentName: (sameAsLead ? name : studentName).trim() || undefined, phone, email: '', instruments: leadInstruments, source, campaign: 'Manual entry', receivedAt: new Date(receivedAt).toISOString(), status: 'hot', activities: [], holdFormComplete: false, trialAttended: false }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Add inquiry</p><h2>New lead</h2><label className="field">Lead name<input required value={name} onChange={(e) => { setName(e.target.value); if (sameAsLead) setStudentName(e.target.value) }} autoFocus /></label><label className="field">Student name <small>Optional</small><input value={sameAsLead ? name : studentName} disabled={sameAsLead} onChange={(e) => setStudentName(e.target.value)} /></label><label className="same-name-check"><input type="checkbox" checked={sameAsLead} onChange={(event) => { setSameAsLead(event.target.checked); if (event.target.checked) setStudentName(name) }} /> Student name is the same as lead name</label><label className="field">Phone<input required value={phone} onChange={(e) => setPhone(e.target.value)} /></label><label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(e) => setReceivedAt(e.target.value)} /><small>Change this if you are entering the lead later.</small></label><label className="field">Instrument(s)<div className="instrument-checks">{instruments.map((item) => <label key={item}><input type="checkbox" checked={leadInstruments.includes(item)} onChange={(event) => setLeadInstruments((current) => event.target.checked ? [...current, item] : current.filter((entry) => entry !== item))} /> {item}</label>)}</div></label><label className="field">Source<select value={source} onChange={(e) => setSource(e.target.value)}><option>Meta</option><option>Website Traffic</option><option>WLS</option><option>Word of Mouth</option></select></label><button className="primary full" type="submit" disabled={!leadInstruments.length}>Save lead</button></form></div>
+}
+
+function AddSiblingModal({ parent, instruments, onClose, onSave }: { parent: Lead; instruments: string[]; onClose: () => void; onSave: (input: { studentName: string; instruments: string[]; receivedAt: string }) => void }) {
+  const [studentName, setStudentName] = useState('')
+  const [leadInstruments, setLeadInstruments] = useState<string[]>(instruments[0] ? [instruments[0]] : [])
+  const [receivedAt, setReceivedAt] = useState(() => toDateTimeInput(new Date()))
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!studentName.trim() || !leadInstruments.length) return; onSave({ studentName, instruments: leadInstruments, receivedAt: new Date(receivedAt).toISOString() }) }}>
+    <button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">{parent.name}'s household</p><h2>Add another student</h2>
+    <p className="muted">Shares {parent.name}'s contact info ({parent.phone || 'no phone on file'}{parent.email ? ` · ${parent.email}` : ''}), but tracks their own trial, instrument, and enrollment status.</p>
+    <label className="field">Student name<input required value={studentName} onChange={(event) => setStudentName(event.target.value)} autoFocus /></label>
+    <label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(event) => setReceivedAt(event.target.value)} /></label>
+    <label className="field">Instrument(s)<div className="instrument-checks">{instruments.map((item) => <label key={item}><input type="checkbox" checked={leadInstruments.includes(item)} onChange={(event) => setLeadInstruments((current) => event.target.checked ? [...current, item] : current.filter((entry) => entry !== item))} /> {item}</label>)}</div></label>
+    <button className="primary full" type="submit" disabled={!studentName.trim() || !leadInstruments.length}>Add student</button>
+  </form></div>
 }
 
 export default App
