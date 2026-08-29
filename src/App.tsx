@@ -243,6 +243,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [quickNoteId, setQuickNoteId] = useState<string | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
   const [siblingModalFor, setSiblingModalFor] = useState<Lead | null>(null)
+  const [unenrollPromptId, setUnenrollPromptId] = useState<string | null>(null)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
   const [pendingUndos, setPendingUndos] = useState<{ key: string; label: string; timerId: number; leadId?: string; revert: () => void }[]>([])
   const selected = leads.find((lead) => lead.id === selectedId)
@@ -359,6 +360,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     const activity: Activity = { id: crypto.randomUUID(), type: 'status_change', occurredAt: new Date().toISOString(), outcome: `Status changed from ${statusLabels[lead.status]} to ${statusLabels[status]}` }
     setLeads((current) => current.map((item) => item.id === id ? { ...item, status, activities: [...item.activities, activity] } : item))
     persist(Promise.all([updateLead(id, { status }), saveActivity(id, activity)]))
+    if (status === 'unenrolled') setUnenrollPromptId(id)
   }
   const updateTrial = (id: string, update: Partial<Lead>, outcome: string) => {
     const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome }
@@ -639,6 +641,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} />}
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {siblingModalFor && <AddSiblingModal parent={siblingModalFor} instruments={offeredInstruments} onClose={() => setSiblingModalFor(null)} onSave={(input) => addSibling(siblingModalFor, input)} />}
+      {unenrollPromptId && <UnenrollCheckInModal lead={leads.find((lead) => lead.id === unenrollPromptId)!} onSkip={() => setUnenrollPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(unenrollPromptId, note, atIso); setUnenrollPromptId(null) }} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
       {pendingUndos.length > 0 && <div className="undo-toast" role="status"><span>{pendingUndos[pendingUndos.length - 1].label}. Saving in 10 seconds.</span><button onClick={() => undoPending(pendingUndos[pendingUndos.length - 1].key)}>Undo</button></div>}
@@ -2188,6 +2191,18 @@ function AddSiblingModal({ parent, instruments, onClose, onSave }: { parent: Lea
     <label className="field">Inquiry received<input required type="datetime-local" value={receivedAt} max={toDateTimeInput(new Date())} onChange={(event) => setReceivedAt(event.target.value)} /></label>
     <label className="field">Instrument(s)<div className="instrument-checks">{instruments.map((item) => <label key={item}><input type="checkbox" checked={leadInstruments.includes(item)} onChange={(event) => setLeadInstruments((current) => event.target.checked ? [...current, item] : current.filter((entry) => entry !== item))} /> {item}</label>)}</div></label>
     <button className="primary full" type="submit" disabled={!studentName.trim() || !leadInstruments.length}>Add student</button>
+  </form></div>
+}
+
+function UnenrollCheckInModal({ lead, onSkip, onSchedule }: { lead: Lead; onSkip: () => void; onSchedule: (note: string, atIso: string) => void }) {
+  const [date, setDate] = useState(() => toDateTimeInput(new Date(Date.now() + 60 * 86_400_000)))
+  const [note, setNote] = useState('Check in about re-enrolling')
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!date) return; onSchedule(note.trim(), new Date(date).toISOString()) }}>
+    <button type="button" className="close" onClick={onSkip}>×</button><p className="eyebrow">{lead.name}</p><h2>When should we check back in?</h2>
+    <p className="muted">They'll sit in Action Pending starting that day, until you mark it done.</p>
+    <label className="field">Check-in date<input required autoFocus type="datetime-local" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+    <label className="field">Note <small>Optional</small><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label>
+    <div className="editor-actions"><button type="button" className="secondary" onClick={onSkip}>Skip</button><button className="primary" type="submit" disabled={!date}>📅 Schedule check-in</button></div>
   </form></div>
 }
 
