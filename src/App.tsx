@@ -1778,6 +1778,8 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const [availabilityDay, setAvailabilityDay] = useState(1)
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
   const [availabilityEnd, setAvailabilityEnd] = useState('20:00')
+  const [vacationStart, setVacationStart] = useState('')
+  const [vacationEnd, setVacationEnd] = useState('')
   const [slotEditor, setSlotEditor] = useState<{ date: Date; time: string; entry?: ScheduleEntry } | null>(null)
   const [removeChoice, setRemoveChoice] = useState<{ entry: ScheduleEntry; date: Date } | null>(null)
   const [hoveredTime, setHoveredTime] = useState<string | null>(null)
@@ -1817,6 +1819,21 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     onScheduleLog({ action: 'Availability removed', instructor: instructor.name, details: `${scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.label} · ${formatClock(block.startTime)}–${formatClock(block.endTime)}` })
   }
 
+  const addVacation = () => {
+    if (!vacationStart || !vacationEnd) return
+    if (vacationStart > vacationEnd) { window.alert('The end date must be on or after the start date.'); return }
+    const days: Date[] = []
+    for (let cursor = new Date(`${vacationStart}T00:00:00`); localDateKey(cursor) <= vacationEnd; cursor = datePlusDays(cursor, 1)) days.push(new Date(cursor))
+    const conflicts = days.flatMap((day) => entries.filter((entry) => entry.instructorId === instructor.id && entry.kind !== 'vacation' && entry.kind !== 'break' && entryOccursOnDate(entry, day)).map((entry) => `${entry.studentName} on ${day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`))
+    if (conflicts.length && !window.confirm(`${instructor.name} already has lessons booked during this range:\n${conflicts.join('\n')}\n\nAdd the vacation anyway? You'll need to reschedule those separately.`)) return
+    const alreadyBlocked = new Set(entries.filter((entry) => entry.instructorId === instructor.id && entry.kind === 'vacation').map((entry) => localDateKey(new Date(entry.startsAt!))))
+    const newEntries: ScheduleEntry[] = days.filter((day) => !alreadyBlocked.has(localDateKey(day))).map((day) => ({ id: crypto.randomUUID(), instructorId: instructor.id, studentName: 'Vacation', instrument: instructor.instruments[0] ?? '', kind: 'vacation', durationMinutes: 1440, startsAt: day.toISOString() }))
+    if (!newEntries.length) return
+    onEntriesChange([...entries, ...newEntries])
+    onScheduleLog({ action: 'Vacation added', instructor: instructor.name, details: `${new Date(`${vacationStart}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(`${vacationEnd}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` })
+    setVacationStart(''); setVacationEnd('')
+  }
+
   const saveEntry = (next: ScheduleEntry) => {
     const existing = entries.find((entry) => entry.id === next.id)
     if (next.kind === 'trial' && !next.leadId) { window.alert('Choose a lead from the list before scheduling the trial.'); return }
@@ -1841,7 +1858,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     const conflictingEntry = entries.filter((entry) => entry.id !== next.id).find((entry) => entry.instructorId === instructor.id
       && entryOccursOnDate(entry, date)
       && timesOverlap(entryStartTime(entry), entry.durationMinutes ?? 30, time, next.durationMinutes ?? 30))
-    if (conflictingEntry) { window.alert(`That lesson overlaps ${conflictingEntry.studentName}'s scheduled time.`); return }
+    if (conflictingEntry) { window.alert(conflictingEntry.kind === 'vacation' ? `${instructor.name} is on vacation that day.` : `That lesson overlaps ${conflictingEntry.studentName}'s scheduled time.`); return }
     const duration = next.durationMinutes ?? 30
     const proposedStart = timeMinutes(time)
     const proposedEnd = proposedStart + duration
@@ -1946,7 +1963,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       <div className="week-switcher"><button onClick={() => setWeekStart(datePlusDays(weekStart, -7))}>←</button><strong>{weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{datePlusDays(weekStart, 5).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong><button onClick={() => setWeekStart(datePlusDays(weekStart, 7))}>→</button></div>
     </div>
 
-    <div className="schedule-legend"><span className="legend-open">Available</span><span className="legend-regular">🔒 Regular student</span><span className="legend-dated">Dated lesson</span><span className="legend-offered">Trial opening</span><span className="legend-break">☕ Break</span><small>Click an available green cell to add or remove it from Text Now.</small></div>
+    <div className="schedule-legend"><span className="legend-open">Available</span><span className="legend-regular">🔒 Regular student</span><span className="legend-dated">Dated lesson</span><span className="legend-offered">Trial opening</span><span className="legend-break">☕ Break</span><span className="legend-vacation">🌴 Vacation</span><small>Click an available green cell to add or remove it from Text Now.</small></div>
 
     <div className="schedule-layout">
       <aside className="schedule-sidebar">
@@ -1956,6 +1973,13 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
           <div className="field-pair"><label className="field">From<input type="time" step="900" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label><label className="field">To<input type="time" step="900" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label></div>
           <button className="secondary full" onClick={addAvailability}>＋ Add available hours</button>
           <div className="availability-chips">{availability.filter((block) => block.instructorId === instructor.id).map((block) => <span key={block.id}>{scheduleDays.find((day) => day.dayOfWeek === block.dayOfWeek)?.short} {formatClock(block.startTime)}–{formatClock(block.endTime)}<button onClick={() => removeAvailability(block)}>×</button></span>)}</div>
+        </div>
+
+        <div className="card schedule-setup">
+          <h2>Instructor vacation</h2><p>Blocks every slot in this range so nothing new can be booked over it.</p>
+          <div className="field-pair"><label className="field">From<input type="date" value={vacationStart} onChange={(event) => setVacationStart(event.target.value)} /></label><label className="field">To<input type="date" value={vacationEnd} min={vacationStart || undefined} onChange={(event) => setVacationEnd(event.target.value)} /></label></div>
+          <button className="secondary full" onClick={addVacation} disabled={!vacationStart || !vacationEnd}>🌴 Add vacation</button>
+          <div className="availability-chips">{entries.filter((entry) => entry.instructorId === instructor.id && entry.kind === 'vacation' && new Date(entry.startsAt!) >= new Date(new Date().setHours(0, 0, 0, 0))).sort((a, b) => Date.parse(a.startsAt!) - Date.parse(b.startsAt!)).map((entry) => <span key={entry.id}>{new Date(entry.startsAt!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}<button onClick={() => onEntriesChange(entries.filter((item) => item.id !== entry.id))}>×</button></span>)}</div>
         </div>
 
         <div className="card schedule-tip"><strong>Add or edit lessons from the calendar</strong><p>Use the small <b>+</b> on an open slot to schedule a student. Click an occupied slot to edit it.</p></div>
@@ -1975,9 +1999,9 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
             const upcoming = upcomingEntriesAtSlot(entries, instructor.id, date, time)
             const upcomingContinuation = entry ? [] : upcomingEntryCoversSlot(entries, instructor.id, date, time).filter((item) => !upcoming.includes(item))
             const past = startsAt < new Date()
-            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : entry.kind === 'break' ? 'break' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
+            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : entry.kind === 'break' ? 'break' : entry.kind === 'vacation' ? 'vacation' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
             return <div className={className} key={`${localDateKey(date)}-${time}`} onMouseEnter={() => setHoveredTime(time)} onMouseLeave={() => setHoveredTime((current) => current === time ? null : current)}>
-              {entry ? <><button type="button" className="cell-main" aria-label={entry.kind === 'break' ? 'Remove break' : `Edit ${entry.studentName}`} onClick={() => entry.kind === 'break' ? setRemoveChoice({ entry, date }) : setSlotEditor({ date, time: entryStartTime(entry), entry })}>{entryStartsHere && <><strong>{entry.kind === 'regular' ? '🔒 ' : entry.kind === 'break' ? '☕ ' : ''}{entry.studentName}</strong><small>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : entry.kind === 'break' ? 'Tap to remove' : 'One-time'} · {entry.durationMinutes ?? 30} min{entry.kind === 'regular' && entry.repeatIntervalWeeks === 2 ? ' · Biweekly' : ''}</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
+              {entry ? <><button type="button" className="cell-main" aria-label={entry.kind === 'break' ? 'Remove break' : entry.kind === 'vacation' ? 'Remove vacation day' : `Edit ${entry.studentName}`} onClick={() => entry.kind === 'break' || entry.kind === 'vacation' ? setRemoveChoice({ entry, date }) : setSlotEditor({ date, time: entryStartTime(entry), entry })}>{(entryStartsHere || entry.kind === 'vacation') && <><strong>{entry.kind === 'regular' ? '🔒 ' : entry.kind === 'break' ? '☕ ' : entry.kind === 'vacation' ? '🌴 ' : ''}{entry.kind === 'vacation' ? 'Vacation' : entry.studentName}</strong><small>{entry.kind === 'vacation' ? 'Tap to remove' : <>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : entry.kind === 'break' ? 'Tap to remove' : 'One-time'} · {entry.durationMinutes ?? 30} min{entry.kind === 'regular' && entry.repeatIntervalWeeks === 2 ? ' · Biweekly' : ''}</>}</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
                 : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.startTime === time ? `${skippedRegular.studentName} absent` : `See above · ${skippedRegular.studentName}`}</small></> : biweeklyOff ? <><strong>Open this week</strong><small>{biweeklyOff.startTime === time ? `${biweeklyOff.studentName} · next ${datePlusDays(date, 7).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : `See above · ${biweeklyOff.studentName}`}</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">See above · {upcomingContinuation[0].studentName}</small>}{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && skippedRegular.startTime === time && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
                   : <>{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">See above · {upcomingContinuation[0].studentName}</small>}<UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>}
             </div>
@@ -2022,7 +2046,7 @@ function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelet
   const [studentName, setStudentName] = useState(existing?.studentName ?? matchedExistingLead?.studentName ?? matchedExistingLead?.name ?? '')
   const [kind, setKind] = useState<ScheduleEntryKind>(existing?.kind ?? 'regular')
   const [instrument, setInstrument] = useState(existing?.instrument ?? instructor.instruments[0])
-  const [durationMinutes, setDurationMinutes] = useState<30 | 45 | 60>(existing?.durationMinutes === 15 ? 30 : existing?.durationMinutes ?? 30)
+  const [durationMinutes, setDurationMinutes] = useState<30 | 45 | 60>(existing?.durationMinutes === 45 || existing?.durationMinutes === 60 ? existing.durationMinutes : 30)
   const [dayOfWeek, setDayOfWeek] = useState(existing?.dayOfWeek ?? slot.date.getDay())
   const [time, setTime] = useState(existing?.startTime ?? slot.time)
   const [startsOn, setStartsOn] = useState(existing?.startsOn ?? localDateKey(slot.date))
