@@ -21,7 +21,7 @@ type ManualEventType = ManualActivityType | 'trial_booked' | 'trial_form_complet
 type ManualActivityInput = { leadId: string; activityId?: string; type: ManualEventType; occurredAt: string; outcome: string; trialAt?: string }
 type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
 type TrialPromptReason = 'booking_form' | 'trial_complete' | 'became_student'
-type PendingActionItem = { lead: Lead; reason: 'manual' | 'enrollment_agreement' | 'follow_up' | TrialPromptReason; action: string; template?: MessageTemplate }
+type PendingActionItem = { lead: Lead; reason: 'manual' | 'enrollment_agreement' | 'follow_up' | 'cadence_complete' | TrialPromptReason; action: string; template?: MessageTemplate }
 type TrialPromptState = { lead: Lead; reason: TrialPromptReason; decision: 'yes' | 'no' | 'second_trial' }
 
 const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
@@ -799,6 +799,8 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       items.push({ lead, reason: 'enrollment_agreement', action: 'Enrollment agreement signed?' })
     } else if (lead.status === 'action_pending') {
       items.push({ lead, reason: 'manual', action: 'Manual follow-up needed' })
+    } else if (lead.status === 'hot' && !lead.trialAt && !lead.followUpAt && activeCadenceState(lead).complete) {
+      items.push({ lead, reason: 'cadence_complete', action: 'Went through the initial outreach period — update their status?' })
     }
     if (lead.followUpAt && Date.parse(lead.followUpAt) <= Date.now()) {
       items.push({ lead, reason: 'follow_up', action: lead.followUpNote ? `Follow up: ${lead.followUpNote}` : 'Follow up now' })
