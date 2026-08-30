@@ -1654,7 +1654,7 @@ function upcomingEntriesAtSlot(entries: ScheduleEntry[], instructorId: string, d
   const displayedSlot = dateAtTime(date, time)
   const cutoff = datePlusDays(displayedSlot, 42)
   return entries.filter((entry) => {
-    if (entry.instructorId !== instructorId) return false
+    if (entry.instructorId !== instructorId || entry.kind === 'vacation') return false
     if (entry.kind === 'regular') {
       if (!entry.startsOn || entry.dayOfWeek !== date.getDay() || entry.startTime !== time) return false
       const begins = actualNextOccurrence(entry)
@@ -1736,7 +1736,7 @@ function bookTrialEntry(instructor: Instructor, allEntries: ScheduleEntry[], ava
 function upcomingEntryCoversSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
   const slot = timeMinutes(time)
   return entries.filter((entry) => {
-    if (entry.instructorId !== instructorId) return false
+    if (entry.instructorId !== instructorId || entry.kind === 'vacation') return false
     if (entry.kind === 'regular') {
       if (!entry.startsOn || entry.dayOfWeek !== date.getDay()) return false
       const start = timeMinutes(entry.startTime!)
