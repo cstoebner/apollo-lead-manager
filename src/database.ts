@@ -71,6 +71,9 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       followUpAt: row.follow_up_at ?? undefined,
       followUpNote: row.follow_up_note ?? undefined,
       householdId: row.household_id ?? undefined,
+      cadenceShiftDays: row.cadence_shift_days ?? undefined,
+      cadencePauseUntil: row.cadence_pause_until ?? undefined,
+      cadencePauseStartedAt: row.cadence_pause_started_at ?? undefined,
     })),
     instructors,
     availability: (availabilityResult.data ?? []).map((row) => ({
@@ -133,6 +136,9 @@ const leadRow = (lead: Lead) => ({
   follow_up_at: lead.followUpAt ?? null,
   follow_up_note: lead.followUpNote ?? null,
   household_id: lead.householdId ?? null,
+  cadence_shift_days: lead.cadenceShiftDays ?? null,
+  cadence_pause_until: lead.cadencePauseUntil ?? null,
+  cadence_pause_started_at: lead.cadencePauseStartedAt ?? null,
 })
 
 export async function saveLead(lead: Lead) {
@@ -151,6 +157,9 @@ export async function updateLead(id: string, update: Partial<Lead>) {
   if ('followUpAt' in update) row.follow_up_at = update.followUpAt ?? null
   if ('followUpNote' in update) row.follow_up_note = update.followUpNote ?? null
   if ('householdId' in update) row.household_id = update.householdId ?? null
+  if ('cadenceShiftDays' in update) row.cadence_shift_days = update.cadenceShiftDays ?? null
+  if ('cadencePauseUntil' in update) row.cadence_pause_until = update.cadencePauseUntil ?? null
+  if ('cadencePauseStartedAt' in update) row.cadence_pause_started_at = update.cadencePauseStartedAt ?? null
   const { error } = await client().from('leads').update(row).eq('id', id)
   assertOk(error)
 }

@@ -28,6 +28,9 @@ export interface Lead {
   followUpAt?: string
   followUpNote?: string
   householdId?: string
+  cadenceShiftDays?: number
+  cadencePauseUntil?: string
+  cadencePauseStartedAt?: string
 }
 
 export interface DayWindow {
