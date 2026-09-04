@@ -34,6 +34,7 @@ const statusLabels: Record<LeadStatus, string> = {
 const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity.type === 'call' || activity.type === 'text').length
 const effectiveNowFor = (lead: Lead) => lead.cadenceShiftDays ? new Date(Date.now() - lead.cadenceShiftDays * 86_400_000) : new Date()
 const isCadencePaused = (lead: Lead) => Boolean(lead.cadencePauseUntil && Date.parse(lead.cadencePauseUntil) > Date.now())
+const hotPriority = (lead: Lead) => (lead.status === 'hot' ? 0 : 1)
 function revertForActivity(activity: Activity): Partial<Lead> | undefined {
   if (activity.type === 'trial_update') {
     if (/^(Trial lesson booked|Trial booked for|Trial rescheduled to|Second trial lesson scheduled)/.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
@@ -841,7 +842,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       template: { label: lead.followUpNote || 'Manual follow-up', message: lead.followUpNote ?? '', callFirst: false } as MessageTemplate,
       progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
     })),
-  ].filter((item) => !item.progress.complete).sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings, messageTemplates])
+  ].filter((item) => !item.progress.complete).sort((a, b) => hotPriority(a.lead) - hotPriority(b.lead) || a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings, messageTemplates])
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
   const queue = planned.filter(({ recommendation }) => recommendation.at <= endOfToday)
