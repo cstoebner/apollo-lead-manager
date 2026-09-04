@@ -2261,12 +2261,13 @@ function AddSiblingModal({ parent, instruments, onClose, onSave }: { parent: Lea
 function ScheduleFollowUpModal({ lead, title, description, cancelLabel, defaultNote, defaultOffsetDays, onCancel, onSchedule }: { lead: Lead; title: string; description: string; cancelLabel: string; defaultNote?: string; defaultOffsetDays: number; onCancel: () => void; onSchedule: (note: string, atIso: string) => void }) {
   const [date, setDate] = useState(() => toDateTimeInput(new Date(Date.now() + defaultOffsetDays * 86_400_000)))
   const [note, setNote] = useState(defaultNote ?? '')
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!date) return; onSchedule(note.trim(), new Date(date).toISOString()) }}>
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!date || new Date(date) < new Date()) return; onSchedule(note.trim(), new Date(date).toISOString()) }}>
     <button type="button" className="close" onClick={onCancel}>×</button><p className="eyebrow">{lead.name}</p><h2>{title}</h2>
     <p className="muted">{description}</p>
-    <label className="field">Follow-up date<input required autoFocus type="datetime-local" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+    <label className="field">Follow-up date<input required autoFocus type="datetime-local" value={date} min={toDateTimeInput(new Date())} onChange={(event) => setDate(event.target.value)} /></label>
+    {date && new Date(date) < new Date() && <p className="picker-warning"><strong>That date is in the past.</strong><span>Double-check the year — pick a date after right now.</span></p>}
     <label className="field">Note <small>Optional</small><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label>
-    <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>{cancelLabel}</button><button className="primary" type="submit" disabled={!date}>📅 Schedule follow-up</button></div>
+    <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>{cancelLabel}</button><button className="primary" type="submit" disabled={!date || new Date(date) < new Date()}>📅 Schedule follow-up</button></div>
   </form></div>
 }
 
@@ -2274,13 +2275,15 @@ function DeferModal({ lead, onCancel, onPauseCadence, onDeferOutside }: { lead: 
   const [mode, setMode] = useState<'within' | 'outside'>('within')
   const [date, setDate] = useState(() => toDateTimeInput(new Date(Date.now() + 3 * 86_400_000)))
   const [note, setNote] = useState('')
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!date) return; const atIso = new Date(date).toISOString(); mode === 'within' ? onPauseCadence(note.trim(), atIso) : onDeferOutside(note.trim(), atIso) }}>
+  const isPast = Boolean(date) && new Date(date) < new Date()
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!date || isPast) return; const atIso = new Date(date).toISOString(); mode === 'within' ? onPauseCadence(note.trim(), atIso) : onDeferOutside(note.trim(), atIso) }}>
     <button type="button" className="close" onClick={onCancel}>×</button><p className="eyebrow">{lead.name}</p><h2>Defer this lead</h2>
     <div className="cadence-track-toggle"><button type="button" className={mode === 'within' ? 'active' : ''} onClick={() => setMode('within')}>⏸ Pause cadence</button><button type="button" className={mode === 'outside' ? 'active' : ''} onClick={() => setMode('outside')}>📤 Take out of cadence</button></div>
     <p className="muted">{mode === 'within' ? "They'll drop out of Next Actions and pick back up right where they left off — same week or stage — once this date arrives." : "They'll drop out of Next Actions and show up in Action Pending for you to handle manually once this date arrives."}</p>
-    <label className="field">{mode === 'within' ? 'Resume date' : 'Follow-up date'}<input required autoFocus type="datetime-local" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+    <label className="field">{mode === 'within' ? 'Resume date' : 'Follow-up date'}<input required autoFocus type="datetime-local" value={date} min={toDateTimeInput(new Date())} onChange={(event) => setDate(event.target.value)} /></label>
+    {isPast && <p className="picker-warning"><strong>That date is in the past.</strong><span>Double-check the year — pick a date after right now.</span></p>}
     <label className="field">Note <small>Optional</small><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label>
-    <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button className="primary" type="submit" disabled={!date}>{mode === 'within' ? '⏸ Pause cadence' : '📅 Schedule follow-up'}</button></div>
+    <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button className="primary" type="submit" disabled={!date || isPast}>{mode === 'within' ? '⏸ Pause cadence' : '📅 Schedule follow-up'}</button></div>
   </form></div>
 }
 
