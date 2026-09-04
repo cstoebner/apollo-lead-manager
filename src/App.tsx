@@ -21,7 +21,7 @@ type ManualEventType = ManualActivityType | 'trial_booked' | 'trial_form_complet
 type ManualActivityInput = { leadId: string; activityId?: string; type: ManualEventType; occurredAt: string; outcome: string; trialAt?: string }
 type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
 type TrialPromptReason = 'booking_form' | 'trial_complete' | 'became_student'
-type PendingActionItem = { lead: Lead; reason: 'manual' | 'enrollment_agreement' | 'follow_up' | 'cadence_complete' | TrialPromptReason; action: string; template?: MessageTemplate }
+type PendingActionItem = { lead: Lead; reason: 'manual' | 'enrollment_agreement' | 'cadence_complete' | TrialPromptReason; action: string; template?: MessageTemplate }
 type TrialPromptState = { lead: Lead; reason: TrialPromptReason; decision: 'yes' | 'no' | 'second_trial' }
 
 const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
@@ -824,12 +824,10 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     } else if (lead.status === 'hot' && !lead.trialAt && !lead.followUpAt && !isCadencePaused(lead) && activeCadenceState(lead).complete) {
       items.push({ lead, reason: 'cadence_complete', action: 'Went through the initial outreach period — update their status?' })
     }
-    if (lead.followUpAt && Date.parse(lead.followUpAt) <= Date.now()) {
-      items.push({ lead, reason: 'follow_up', action: lead.followUpNote ? `Follow up: ${lead.followUpNote}` : 'Follow up now' })
-    }
     return items
   })
   const nurture = leads.filter((lead) => lead.status === 'nurture' && !lead.followUpAt && !isCadencePaused(lead))
+  const followUps = leads.filter((lead) => lead.followUpAt && lead.status !== 'unresponsive' && lead.status !== 'nurture_long_term')
   const planned = useMemo(() => [
     ...active.map((lead) => ({ lead, kind: 'active' as const, recommendation: nextContact(lead, defaultAvailability, effectiveNowFor(lead)), template: activeFollowUpFor(lead, messageTemplates), progress: activeCadenceState(lead) })),
     ...nurture.map((lead) => {
@@ -837,6 +835,12 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       const matchingOpenings = trialOpenings.filter((opening) => shareInstrument(opening.instruments, lead.instruments) && Date.parse(opening.startsAt) > Date.now())
       return { lead, kind: 'nurture' as const, recommendation, template: nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2, messageTemplates), progress: nurtureCadenceState(lead) }
     }),
+    ...followUps.map((lead) => ({
+      lead, kind: 'follow_up' as const,
+      recommendation: { at: new Date(lead.followUpAt!), reason: 'Scheduled follow-up', complete: false },
+      template: { label: lead.followUpNote || 'Manual follow-up', message: lead.followUpNote ?? '', callFirst: false } as MessageTemplate,
+      progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
+    })),
   ].filter((item) => !item.progress.complete).sort((a, b) => a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings, messageTemplates])
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
@@ -854,19 +858,31 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     <section className="card queue-card">
       <div className="section-head"><div><h2>Next actions</h2><p>Hot leads and nurture contacts, ordered by who should hear from you next.</p></div><span className="live-pill">● Priority order</span></div>
       <div className="queue-list">
-        {queue.map(({ lead, recommendation, template, progress }, index) => {
+        {queue.map(({ lead, kind, recommendation, template, progress }, index) => {
           const channel = template.callFirst ? 'Call, then text' : 'Text only'
           return <article className="queue-row" key={lead.id}>
             <div className={`priority ${recommendation.at <= now ? 'urgent' : ''}`}>{index + 1}</div>
             <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {leadInstrumentLabel(lead)} · {lead.source}</span>{lastCallNote(lead) && <small className="last-call-note">📞 {lastCallNote(lead)}</small>}</div>
-            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason} · {channel}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
-            <div className="row-actions">{template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button><button onClick={() => onTakeNote(lead.id)}>✎ Take note</button><button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button><button className="defer-button" title="Schedule a follow-up date and drop this out of Next Actions until then" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button></div>
+            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
+            <div className="row-actions">{kind === 'follow_up' ? <>
+              <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
+              <button onClick={() => setCallOutcomeLead(lead)}>☎ Log call</button>
+              <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
+              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+              <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
+            </> : <>
+              {template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}
+              <button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button>
+              <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
+              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+              <button className="defer-button" title="Schedule a follow-up date and drop this out of Next Actions until then" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
+            </>}</div>
           </article>
         })}
         {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
-    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} onResolveFollowUp={onResolveFollowUp} />
+    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} />
     <section className="card upcoming-outreach-card">
       <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
       <div className="upcoming-outreach-list">{upcomingDays.map(({ date, items }) => {
@@ -881,7 +897,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 
 const isTrialPromptReason = (reason: PendingActionItem['reason']): reason is TrialPromptReason => reason === 'booking_form' || reason === 'trial_complete' || reason === 'became_student'
 
-function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNote, onPromptYes, onPromptNo, onPromptSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp }: {
+function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNote, onPromptYes, onPromptNo, onPromptSecondTrial, onCollectSignature, onOverrideSignature }: {
   leads: PendingActionItem[]
   onSelect: (id: string) => void
   onLog: (id: string, type: ActivityType, outcome?: string) => void
@@ -893,7 +909,6 @@ function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNo
   onPromptSecondTrial: (lead: Lead, reason: TrialPromptReason) => void
   onCollectSignature: (lead: Lead) => void
   onOverrideSignature: (lead: Lead) => void
-  onResolveFollowUp: (lead: Lead) => void
 }) {
   return <section className="card pending-card">
     <div className="section-head"><div><h2>Action pending</h2><p>Trial milestones and manual follow-ups that still need your attention.</p></div></div>
@@ -911,10 +926,6 @@ function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNo
         </> : reason === 'enrollment_agreement' ? <>
           <button className="prompt-yes" onClick={() => onCollectSignature(lead)}>✓ Collected signature</button>
           <button className="prompt-no" onClick={() => window.confirm(`Remove ${lead.name} from this list without collecting a signature?`) && onOverrideSignature(lead)}>✕ Not required</button>
-        </> : reason === 'follow_up' ? <>
-          <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
-          <button onClick={() => onLogCall(lead)}>☎ Log call</button>
-          <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
         </> : <>
           <button onClick={() => onLogCall(lead)}>☎ Log call</button>
           <button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button>
