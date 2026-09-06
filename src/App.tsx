@@ -899,6 +899,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
             <div className="row-actions">{kind === 'follow_up' ? <>
               <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
               <button onClick={() => setCallOutcomeLead(lead)}>☎ Log call</button>
+              <button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button>
               <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
               <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
