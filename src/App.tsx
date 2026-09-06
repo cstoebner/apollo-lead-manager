@@ -685,7 +685,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={setDeferPromptFor} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={setDeferPromptFor} onStatusChange={changeStatus} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -816,7 +816,7 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange }: {
   leads: Lead[]
   instructors: Instructor[]
   instructorAvailability: InstructorAvailability[]
@@ -836,6 +836,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   onScheduleFollowUp: (id: string, note: string, atIso: string) => void
   onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
   onDeferFollowUp: (lead: Lead) => void
+  onStatusChange: (id: string, status: LeadStatus) => void
 }) {
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
   const [callOutcomeLead, setCallOutcomeLead] = useState<Lead | null>(null)
@@ -915,7 +916,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
         {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
-    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} />
+    <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} onStatusChange={onStatusChange} />
     <section className="card upcoming-outreach-card">
       <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
       <div className="upcoming-outreach-list">{upcomingDays.map(({ date, items }) => {
@@ -930,7 +931,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 
 const isTrialPromptReason = (reason: PendingActionItem['reason']): reason is TrialPromptReason => reason === 'booking_form' || reason === 'trial_complete' || reason === 'became_student'
 
-function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNote, onPromptYes, onPromptNo, onPromptSecondTrial, onCollectSignature, onOverrideSignature }: {
+function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNote, onPromptYes, onPromptNo, onPromptSecondTrial, onCollectSignature, onOverrideSignature, onStatusChange }: {
   leads: PendingActionItem[]
   onSelect: (id: string) => void
   onLog: (id: string, type: ActivityType, outcome?: string) => void
@@ -942,6 +943,7 @@ function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNo
   onPromptSecondTrial: (lead: Lead, reason: TrialPromptReason) => void
   onCollectSignature: (lead: Lead) => void
   onOverrideSignature: (lead: Lead) => void
+  onStatusChange: (id: string, status: LeadStatus) => void
 }) {
   return <section className="card pending-card">
     <div className="section-head"><div><h2>Action pending</h2><p>Trial milestones and manual follow-ups that still need your attention.</p></div></div>
@@ -959,6 +961,9 @@ function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNo
         </> : reason === 'enrollment_agreement' ? <>
           <button className="prompt-yes" onClick={() => onCollectSignature(lead)}>✓ Collected signature</button>
           <button className="prompt-no" onClick={() => window.confirm(`Remove ${lead.name} from this list without collecting a signature?`) && onOverrideSignature(lead)}>✕ Not required</button>
+        </> : reason === 'cadence_complete' ? <>
+          <button className="prompt-yes" onClick={() => onStatusChange(lead.id, 'nurture')}>✓ Move to Nurture</button>
+          <button className="prompt-no" onClick={() => onSelect(lead.id)}>✕ Not now</button>
         </> : <>
           <button onClick={() => onLogCall(lead)}>☎ Log call</button>
           <button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button>
