@@ -52,6 +52,21 @@ export interface Instructor {
   id: string
   name: string
   instruments: string[]
+  esstEligible?: boolean
+}
+
+export interface EsstHoursEntry {
+  id: string
+  instructorId: string
+  periodEndsOn: string
+  hoursWorked: number
+}
+
+export interface EsstUsageEntry {
+  id: string
+  instructorId: string
+  usedOn: string
+  hours: number
 }
 
 export interface InstructorAvailability {

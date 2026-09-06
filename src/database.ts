@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { Activity, Instructor, InstructorAvailability, Lead, ScheduleActivity, ScheduleEntry, TrialOpening } from './types'
+import type { Activity, EsstHoursEntry, EsstUsageEntry, Instructor, InstructorAvailability, Lead, ScheduleActivity, ScheduleEntry, TrialOpening } from './types'
 
 export interface WorkspaceData {
   leads: Lead[]
@@ -8,6 +8,8 @@ export interface WorkspaceData {
   entries: ScheduleEntry[]
   openings: TrialOpening[]
   scheduleActivities: ScheduleActivity[]
+  esstHoursEntries: EsstHoursEntry[]
+  esstUsageEntries: EsstUsageEntry[]
   instruments?: string[]
   messageTemplates?: Record<string, string>
 }
@@ -25,7 +27,7 @@ const shortTime = (value?: string | null) => value ? value.slice(0, 5) : undefin
 
 export async function loadWorkspaceData(): Promise<WorkspaceData> {
   const db = client()
-  const [leadResult, activityResult, instructorResult, availabilityResult, entryResult, openingResult, scheduleActivityResult, settingsResult] = await Promise.all([
+  const [leadResult, activityResult, instructorResult, availabilityResult, entryResult, openingResult, scheduleActivityResult, esstHoursResult, esstUsageResult, settingsResult] = await Promise.all([
     db.from('leads').select('*').order('received_at', { ascending: false }),
     db.from('activities').select('*').order('occurred_at', { ascending: true }),
     db.from('instructors').select('*').order('name', { ascending: true }),
@@ -33,10 +35,12 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
     db.from('schedule_entries').select('*'),
     db.from('trial_openings').select('*').order('starts_at', { ascending: true }),
     db.from('schedule_activities').select('*').order('occurred_at', { ascending: true }),
+    db.from('esst_hours_entries').select('*').order('period_ends_on', { ascending: true }),
+    db.from('esst_usage_entries').select('*').order('used_on', { ascending: true }),
     db.from('app_settings').select('*').maybeSingle(),
   ])
 
-  ;[leadResult, activityResult, instructorResult, availabilityResult, entryResult, openingResult, scheduleActivityResult, settingsResult]
+  ;[leadResult, activityResult, instructorResult, availabilityResult, entryResult, openingResult, scheduleActivityResult, esstHoursResult, esstUsageResult, settingsResult]
     .forEach((result) => assertOk(result.error))
 
   const activitiesByLead = new Map<string, Activity[]>()
@@ -46,7 +50,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
   }
 
   const instructors: Instructor[] = (instructorResult.data ?? []).map((row) => ({
-    id: row.id, name: row.name, instruments: row.instruments ?? [],
+    id: row.id, name: row.name, instruments: row.instruments ?? [], esstEligible: row.esst_eligible ?? true,
   }))
   const instructorNames = new Map(instructors.map((instructor) => [instructor.id, instructor.name]))
 
@@ -110,6 +114,12 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
       instructor: row.instructor_name,
       details: row.details,
       studentName: row.student_name ?? undefined,
+    })),
+    esstHoursEntries: (esstHoursResult.data ?? []).map((row) => ({
+      id: row.id, instructorId: row.instructor_id, periodEndsOn: row.period_ends_on, hoursWorked: Number(row.hours_worked),
+    })),
+    esstUsageEntries: (esstUsageResult.data ?? []).map((row) => ({
+      id: row.id, instructorId: row.instructor_id, usedOn: row.used_on, hours: Number(row.hours),
     })),
     instruments: settingsResult.data?.offered_instruments ?? undefined,
     messageTemplates: settingsResult.data?.message_templates ?? undefined,
@@ -212,7 +222,7 @@ export async function syncInstructors(previous: Instructor[], next: Instructor[]
     assertOk(error)
   }
   if (next.length) {
-    const { error } = await db.from('instructors').upsert(next.map((item) => ({ id: item.id, name: item.name, instruments: item.instruments })))
+    const { error } = await db.from('instructors').upsert(next.map((item) => ({ id: item.id, name: item.name, instruments: item.instruments, esst_eligible: item.esstEligible ?? true })))
     assertOk(error)
   }
 }
@@ -270,6 +280,30 @@ export async function saveScheduleActivity(activity: ScheduleActivity, instructo
 
 export async function removeScheduleActivity(id: string) {
   const { error } = await client().from('schedule_activities').delete().eq('id', id)
+  assertOk(error)
+}
+
+export async function saveEsstHoursEntry(entry: EsstHoursEntry) {
+  const { error } = await client().from('esst_hours_entries').upsert({
+    id: entry.id, instructor_id: entry.instructorId, period_ends_on: entry.periodEndsOn, hours_worked: entry.hoursWorked,
+  })
+  assertOk(error)
+}
+
+export async function removeEsstHoursEntry(id: string) {
+  const { error } = await client().from('esst_hours_entries').delete().eq('id', id)
+  assertOk(error)
+}
+
+export async function saveEsstUsageEntry(entry: EsstUsageEntry) {
+  const { error } = await client().from('esst_usage_entries').upsert({
+    id: entry.id, instructor_id: entry.instructorId, used_on: entry.usedOn, hours: entry.hours,
+  })
+  assertOk(error)
+}
+
+export async function removeEsstUsageEntry(id: string) {
+  const { error } = await client().from('esst_usage_entries').delete().eq('id', id)
   assertOk(error)
 }
 
