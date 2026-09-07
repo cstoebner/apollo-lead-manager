@@ -36,9 +36,20 @@ const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity
 const effectiveNowFor = (lead: Lead) => lead.cadenceShiftDays ? new Date(Date.now() - lead.cadenceShiftDays * 86_400_000) : new Date()
 const isCadencePaused = (lead: Lead) => Boolean(lead.cadencePauseUntil && Date.parse(lead.cadencePauseUntil) > Date.now())
 const hotPriority = (lead: Lead) => (lead.status === 'hot' ? 0 : 1)
+const TRIAL_BOOKED_PATTERN = /^(Trial lesson booked|Trial booked for|Trial rescheduled to|Second trial lesson scheduled)/
+const trialBookedAt = (lead: Lead): Date => {
+  const match = [...lead.activities].reverse().find((activity) => activity.type === 'trial_update' && TRIAL_BOOKED_PATTERN.test(activity.outcome))
+  return new Date(match ? match.occurredAt : lead.receivedAt)
+}
+const next7am = (date: Date) => {
+  const next = new Date(date)
+  next.setDate(next.getDate() + 1)
+  next.setHours(7, 0, 0, 0)
+  return next
+}
 function revertForActivity(activity: Activity): Partial<Lead> | undefined {
   if (activity.type === 'trial_update') {
-    if (/^(Trial lesson booked|Trial booked for|Trial rescheduled to|Second trial lesson scheduled)/.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
+    if (TRIAL_BOOKED_PATTERN.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
     if (/^(Trial confirmation form completed|Booking form completed)/.test(activity.outcome)) return { holdFormComplete: false }
     if (/^(Trial lesson completed|Trial marked completed)/.test(activity.outcome)) return { trialAttended: false }
   }
@@ -844,9 +855,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   const pending: PendingActionItem[] = leads.flatMap<PendingActionItem>((lead) => {
     if (lead.status === 'unresponsive' || lead.status === 'nurture_long_term') return []
     const items: PendingActionItem[] = []
-    if (lead.trialAt && !lead.holdFormComplete && lead.status !== 'unenrolled') {
-      items.push({ lead, reason: 'booking_form', action: 'Booking form complete?', template: trialFormReminderFor(lead, messageTemplates) })
-    } else if (lead.trialAt && lead.holdFormComplete && !lead.trialAttended && Date.parse(lead.trialAt) <= Date.now() && lead.status !== 'unenrolled') {
+    if (lead.trialAt && lead.holdFormComplete && !lead.trialAttended && Date.parse(lead.trialAt) <= Date.now() && lead.status !== 'unenrolled') {
       items.push({ lead, reason: 'trial_complete', action: 'Trial complete?' })
     } else if (lead.trialAttended && lead.status !== 'active_student' && lead.status !== 'unenrolled') {
       items.push({ lead, reason: 'became_student', action: 'Converted to student?' })
@@ -861,6 +870,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   })
   const nurture = leads.filter((lead) => lead.status === 'nurture' && !lead.followUpAt && !isCadencePaused(lead))
   const followUps = leads.filter((lead) => lead.followUpAt && lead.status !== 'unresponsive' && lead.status !== 'nurture_long_term')
+  const bookingFormReminders = leads.filter((lead) => lead.trialAt && !lead.holdFormComplete && lead.status !== 'unenrolled')
   const planned = useMemo(() => [
     ...active.map((lead) => ({ lead, kind: 'active' as const, recommendation: nextContact(lead, defaultAvailability, effectiveNowFor(lead)), template: activeFollowUpFor(lead, messageTemplates), progress: activeCadenceState(lead) })),
     ...nurture.map((lead) => {
@@ -868,6 +878,12 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       const matchingOpenings = trialOpenings.filter((opening) => shareInstrument(opening.instruments, lead.instruments) && Date.parse(opening.startsAt) > Date.now())
       return { lead, kind: 'nurture' as const, recommendation, template: nurtureMessageFor(lead, recommendation.at, matchingOpenings.length >= 2, messageTemplates), progress: nurtureCadenceState(lead) }
     }),
+    ...bookingFormReminders.map((lead) => ({
+      lead, kind: 'trial_form' as const,
+      recommendation: { at: next7am(trialBookedAt(lead)), reason: 'Trial booked — confirm the form', complete: false },
+      template: trialFormReminderFor(lead, messageTemplates),
+      progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
+    })),
     ...followUps.map((lead) => ({
       lead, kind: 'follow_up' as const,
       recommendation: { at: new Date(lead.followUpAt!), reason: 'Scheduled follow-up', complete: false },
@@ -896,7 +912,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
           return <article className="queue-row" key={lead.id}>
             <div className={`priority ${recommendation.at <= now ? 'urgent' : ''}`}>{index + 1}</div>
             <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {leadInstrumentLabel(lead)} · {lead.source}</span>{lastCallNote(lead) && <small className="last-call-note">📞 {lastCallNote(lead)}</small>}</div>
-            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
+            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' || kind === 'trial_form' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
             <div className="row-actions">{kind === 'follow_up' ? <>
               <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
               <button onClick={() => setCallOutcomeLead(lead)}>☎ Log call</button>
@@ -904,6 +920,9 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
               <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
               <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
+            </> : kind === 'trial_form' ? <>
+              <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
+              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
             </> : <>
               {template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}
               <button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button>
@@ -957,7 +976,6 @@ function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNo
         </> : isTrialPromptReason(reason) ? <>
           <button className="prompt-yes" onClick={() => onPromptYes(lead, reason)}>✓ Yes</button>
           <button className="prompt-no" onClick={() => onPromptNo(lead, reason)}>✕ No</button>
-          {reason === 'booking_form' && <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text reminder</button>}
         </> : reason === 'enrollment_agreement' ? <>
           <button className="prompt-yes" onClick={() => onCollectSignature(lead)}>✓ Collected signature</button>
           <button className="prompt-no" onClick={() => window.confirm(`Remove ${lead.name} from this list without collecting a signature?`) && onOverrideSignature(lead)}>✕ Not required</button>
