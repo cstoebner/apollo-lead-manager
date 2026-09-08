@@ -922,6 +922,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
               <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
             </> : kind === 'trial_form' ? <>
               <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
+              <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
             </> : <>
               {template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}
