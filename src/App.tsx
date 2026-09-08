@@ -24,6 +24,8 @@ type LeadSortKey = 'name' | 'receivedAt' | 'source' | 'touches' | 'status'
 type TrialPromptReason = 'booking_form' | 'trial_complete' | 'became_student'
 type PendingActionItem = { lead: Lead; reason: 'manual' | 'enrollment_agreement' | 'cadence_complete' | TrialPromptReason; action: string; template?: MessageTemplate }
 type TrialPromptState = { lead: Lead; reason: TrialPromptReason; decision: 'yes' | 'no' | 'second_trial' }
+type DeferContext = { kind: 'active' | 'nurture' | 'follow_up' | 'trial_form'; callLogged: boolean; textLogged: boolean }
+type DeferPromptState = { lead: Lead } & DeferContext
 
 const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
@@ -255,7 +257,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [showNewLead, setShowNewLead] = useState(false)
   const [siblingModalFor, setSiblingModalFor] = useState<Lead | null>(null)
   const [unenrollPromptId, setUnenrollPromptId] = useState<string | null>(null)
-  const [deferPromptFor, setDeferPromptFor] = useState<Lead | null>(null)
+  const [deferPromptFor, setDeferPromptFor] = useState<DeferPromptState | null>(null)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
   const [pendingUndos, setPendingUndos] = useState<{ key: string; label: string; timerId: number; leadId?: string; revert: () => void }[]>([])
   const selected = leads.find((lead) => lead.id === selectedId)
@@ -690,7 +692,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={setDeferPromptFor} onStatusChange={changeStatus} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -702,7 +704,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {siblingModalFor && <AddSiblingModal parent={siblingModalFor} instruments={offeredInstruments} onClose={() => setSiblingModalFor(null)} onSave={(input) => addSibling(siblingModalFor, input)} />}
       {unenrollPromptId && <ScheduleFollowUpModal lead={leads.find((lead) => lead.id === unenrollPromptId)!} title="When should we check back in?" description="They'll sit in Action Pending starting that day, until you mark it done." cancelLabel="Skip" defaultNote="Check in about re-enrolling" defaultOffsetDays={60} onCancel={() => setUnenrollPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(unenrollPromptId, note, atIso); setUnenrollPromptId(null) }} />}
-      {deferPromptFor && <DeferModal lead={deferPromptFor} onCancel={() => setDeferPromptFor(null)} onPauseCadence={(note, atIso) => { pauseCadence(deferPromptFor.id, atIso, note); setDeferPromptFor(null) }} onDeferOutside={(note, atIso) => { scheduleFollowUp(deferPromptFor.id, note, atIso); setDeferPromptFor(null) }} />}
+      {deferPromptFor && <DeferModal lead={deferPromptFor.lead} canSkip={deferPromptFor.kind === 'active' || deferPromptFor.kind === 'nurture'} callLogged={deferPromptFor.callLogged} textLogged={deferPromptFor.textLogged} onCancel={() => setDeferPromptFor(null)} onPauseCadence={(note, atIso) => { pauseCadence(deferPromptFor.lead.id, atIso, note); setDeferPromptFor(null) }} onDeferOutside={(note, atIso) => { scheduleFollowUp(deferPromptFor.lead.id, note, atIso); setDeferPromptFor(null) }} onSkip={(part) => { if (part !== 'text') logActivity(deferPromptFor.lead.id, 'call', 'Skipped for this cadence step'); if (part !== 'call') logActivity(deferPromptFor.lead.id, 'text', 'Skipped for this cadence step'); setDeferPromptFor(null) }} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
       {pendingUndos.length > 0 && <div className="undo-toast" role="status"><span>{pendingUndos[pendingUndos.length - 1].label}. Saving in 10 seconds.</span><button onClick={() => undoPending(pendingUndos[pendingUndos.length - 1].key)}>Undo</button></div>}
@@ -840,7 +842,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   onResolveFollowUp: (lead: Lead) => void
   onScheduleFollowUp: (id: string, note: string, atIso: string) => void
   onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
-  onDeferFollowUp: (lead: Lead) => void
+  onDeferFollowUp: (lead: Lead, context: DeferContext) => void
   onStatusChange: (id: string, status: LeadStatus) => void
 }) {
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
@@ -913,7 +915,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
               <button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button>
               <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
-              <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
+              <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead, { kind: 'follow_up', callLogged: false, textLogged: false })}>📅 Defer</button>
             </> : kind === 'trial_form' ? <>
               <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
               <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
@@ -923,7 +925,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
               <button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button>
               <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
-              <button className="defer-button" title="Schedule a follow-up date and drop this out of Next Actions until then" onClick={() => onDeferFollowUp(lead)}>📅 Defer</button>
+              <button className="defer-button" title="Schedule a follow-up date and drop this out of Next Actions until then" onClick={() => onDeferFollowUp(lead, { kind, callLogged: progress.callLogged, textLogged: progress.textLogged })}>📅 Defer</button>
             </>}</div>
           </article>
         })}
@@ -2438,19 +2440,29 @@ function ScheduleFollowUpModal({ lead, title, description, cancelLabel, defaultN
   </form></div>
 }
 
-function DeferModal({ lead, onCancel, onPauseCadence, onDeferOutside }: { lead: Lead; onCancel: () => void; onPauseCadence: (note: string, atIso: string) => void; onDeferOutside: (note: string, atIso: string) => void }) {
-  const [mode, setMode] = useState<'within' | 'outside'>('within')
+function DeferModal({ lead, canSkip, callLogged, textLogged, onCancel, onPauseCadence, onDeferOutside, onSkip }: { lead: Lead; canSkip: boolean; callLogged: boolean; textLogged: boolean; onCancel: () => void; onPauseCadence: (note: string, atIso: string) => void; onDeferOutside: (note: string, atIso: string) => void; onSkip: (part: 'call' | 'text' | 'both') => void }) {
+  const [mode, setMode] = useState<'within' | 'outside' | 'skip'>('within')
   const [date, setDate] = useState(() => toDateTimeInput(new Date(Date.now() + 3 * 86_400_000)))
   const [note, setNote] = useState('')
   const isPast = Boolean(date) && new Date(date) < new Date()
-  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (!date || isPast) return; const atIso = new Date(date).toISOString(); mode === 'within' ? onPauseCadence(note.trim(), atIso) : onDeferOutside(note.trim(), atIso) }}>
+  return <div className="overlay modal-overlay"><form className="modal" onSubmit={(event) => { event.preventDefault(); if (mode === 'skip' || !date || isPast) return; const atIso = new Date(date).toISOString(); mode === 'within' ? onPauseCadence(note.trim(), atIso) : onDeferOutside(note.trim(), atIso) }}>
     <button type="button" className="close" onClick={onCancel}>×</button><p className="eyebrow">{lead.name}</p><h2>Defer this lead</h2>
-    <div className="cadence-track-toggle"><button type="button" className={mode === 'within' ? 'active' : ''} onClick={() => setMode('within')}>⏸ Pause cadence</button><button type="button" className={mode === 'outside' ? 'active' : ''} onClick={() => setMode('outside')}>📤 Take out of cadence</button></div>
-    <p className="muted">{mode === 'within' ? "They'll drop out of Next Actions and pick back up right where they left off — same week or stage — once this date arrives." : "They'll drop out of Next Actions and show up in Action Pending for you to handle manually once this date arrives."}</p>
-    <label className="field">{mode === 'within' ? 'Resume date' : 'Follow-up date'}<input required autoFocus type="datetime-local" value={date} min={toDateTimeInput(new Date())} onChange={(event) => setDate(event.target.value)} /></label>
-    {isPast && <p className="picker-warning"><strong>That date is in the past.</strong><span>Double-check the year — pick a date after right now.</span></p>}
-    <label className="field">Note <small>Optional</small><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label>
-    <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button className="primary" type="submit" disabled={!date || isPast}>{mode === 'within' ? '⏸ Pause cadence' : '📅 Schedule follow-up'}</button></div>
+    <div className="cadence-track-toggle"><button type="button" className={mode === 'within' ? 'active' : ''} onClick={() => setMode('within')}>⏸ Pause cadence</button><button type="button" className={mode === 'outside' ? 'active' : ''} onClick={() => setMode('outside')}>📤 Take out of cadence</button>{canSkip && <button type="button" className={mode === 'skip' ? 'active' : ''} onClick={() => setMode('skip')}>⏭ Skip</button>}</div>
+    {mode === 'skip' ? <>
+      <p className="muted">Skip just this step of the cadence — the next message still lands on its normal schedule. Nothing else changes.</p>
+      <div className="editor-actions">
+        <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
+        {!callLogged && !textLogged && <button type="button" className="primary" onClick={() => onSkip('both')}>⏭ Skip this message</button>}
+        {textLogged && !callLogged && <button type="button" className="primary" onClick={() => onSkip('call')}>⏭ Skip call</button>}
+        {callLogged && !textLogged && <button type="button" className="primary" onClick={() => onSkip('text')}>⏭ Skip text</button>}
+      </div>
+    </> : <>
+      <p className="muted">{mode === 'within' ? "They'll drop out of Next Actions and pick back up right where they left off — same week or stage — once this date arrives." : "They'll drop out of Next Actions and show up in Action Pending for you to handle manually once this date arrives."}</p>
+      <label className="field">{mode === 'within' ? 'Resume date' : 'Follow-up date'}<input required autoFocus type="datetime-local" value={date} min={toDateTimeInput(new Date())} onChange={(event) => setDate(event.target.value)} /></label>
+      {isPast && <p className="picker-warning"><strong>That date is in the past.</strong><span>Double-check the year — pick a date after right now.</span></p>}
+      <label className="field">Note <small>Optional</small><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember?" /></label>
+      <div className="editor-actions"><button type="button" className="secondary" onClick={onCancel}>Cancel</button><button className="primary" type="submit" disabled={!date || isPast}>{mode === 'within' ? '⏸ Pause cadence' : '📅 Schedule follow-up'}</button></div>
+    </>}
   </form></div>
 }
 
