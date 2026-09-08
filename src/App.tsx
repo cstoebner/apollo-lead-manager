@@ -41,12 +41,6 @@ const trialBookedAt = (lead: Lead): Date => {
   const match = [...lead.activities].reverse().find((activity) => activity.type === 'trial_update' && TRIAL_BOOKED_PATTERN.test(activity.outcome))
   return new Date(match ? match.occurredAt : lead.receivedAt)
 }
-const next7am = (date: Date) => {
-  const next = new Date(date)
-  next.setDate(next.getDate() + 1)
-  next.setHours(7, 0, 0, 0)
-  return next
-}
 function revertForActivity(activity: Activity): Partial<Lead> | undefined {
   if (activity.type === 'trial_update') {
     if (TRIAL_BOOKED_PATTERN.test(activity.outcome)) return { trialAt: undefined, holdFormComplete: false, trialAttended: false }
@@ -880,7 +874,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     }),
     ...bookingFormReminders.map((lead) => ({
       lead, kind: 'trial_form' as const,
-      recommendation: { at: next7am(trialBookedAt(lead)), reason: 'Trial booked — confirm the form', complete: false },
+      recommendation: { at: trialBookedAt(lead), reason: 'Trial booked — confirm the form', complete: false },
       template: trialFormReminderFor(lead, messageTemplates),
       progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
     })),
