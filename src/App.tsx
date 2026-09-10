@@ -26,6 +26,7 @@ type PendingActionItem = { lead: Lead; reason: 'manual' | 'enrollment_agreement'
 type TrialPromptState = { lead: Lead; reason: TrialPromptReason; decision: 'yes' | 'no' | 'second_trial' }
 type DeferContext = { kind: 'active' | 'nurture' | 'follow_up' | 'trial_form'; callLogged: boolean; textLogged: boolean }
 type DeferPromptState = { lead: Lead } & DeferContext
+type ClearTrialOptions = { confirmMessage?: string; outcome?: string }
 
 const defaultInstruments = ['Piano', 'Guitar', 'Voice', 'Drums', 'Violin', 'Saxophone', 'Trumpet', 'Trombone']
 
@@ -658,10 +659,11 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     return true
   }
 
-  const clearTrial = (lead: Lead) => {
-    if (!window.confirm(`Clear ${lead.name}'s trial booking? This removes it from their record and cancels their slot on the instructor's calendar if one still exists.`)) return
+  const clearTrial = (lead: Lead, options?: ClearTrialOptions) => {
+    const confirmMessage = options?.confirmMessage ?? `Clear ${lead.name}'s trial booking? This removes it from their record and cancels their slot on the instructor's calendar if one still exists.`
+    if (!window.confirm(confirmMessage)) return
     const leadUpdate: Partial<Lead> = { trialAt: undefined, holdFormComplete: false, trialAttended: false }
-    const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome: 'Trial booking cleared' }
+    const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome: options?.outcome ?? 'Trial booking cleared' }
     setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item))
     replaceEntries(scheduleEntries.filter((entry) => !(entry.leadId === lead.id && entry.kind === 'trial')))
     persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)]))
@@ -692,7 +694,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -823,7 +825,7 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial }: {
   leads: Lead[]
   instructors: Instructor[]
   instructorAvailability: InstructorAvailability[]
@@ -844,6 +846,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   onBookTrial: (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes?: 30 | 45 | 60) => boolean
   onDeferFollowUp: (lead: Lead, context: DeferContext) => void
   onStatusChange: (id: string, status: LeadStatus) => void
+  onClearTrial: (lead: Lead, options?: ClearTrialOptions) => void
 }) {
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
   const [callOutcomeLead, setCallOutcomeLead] = useState<Lead | null>(null)
@@ -920,6 +923,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
               <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
               <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+              <button className="prompt-no" onClick={() => onClearTrial(lead, { confirmMessage: `Cancel ${lead.name}'s trial? They didn't complete the registration form in time — this removes their slot from the instructor's calendar.`, outcome: 'Trial cancelled — registration form not completed in time' })}>✕ Didn't fill out — cancel trial</button>
             </> : <>
               {template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}
               <button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button>
