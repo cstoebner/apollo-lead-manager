@@ -1106,7 +1106,8 @@ function ActivityLog({ leads, instruments, instructors, scheduleActivities, onSe
     const rows = entries.map((entry) => {
       if (entry.kind === 'lead') {
         const action = entry.activity.type === 'call' ? 'Call logged' : entry.activity.type === 'text' ? 'Text logged' : entry.activity.type === 'email' ? 'Email logged' : entry.activity.type === 'note' ? 'Note added' : entry.activity.type === 'status_change' ? 'Status updated' : entry.activity.type === 'trial_update' ? 'Trial updated' : entry.activity.type === 'lead_created' ? 'New lead received' : entry.activity.type === 'lead_update' ? 'Lead information updated' : entry.activity.outcome
-        return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Lead', entry.lead.name, '', action, entry.activity.outcome]
+        const details = entry.activity.type === 'lead_created' ? `${entry.lead.source}${entry.lead.campaign ? ` · ${entry.lead.campaign}` : ''}` : entry.activity.outcome
+        return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Lead', entry.lead.name, '', action, details]
       }
       return [new Date(entry.occurredAt).toLocaleString('en-US'), 'Schedule', entry.activity.studentName ?? '', entry.activity.instructor, entry.activity.action, entry.activity.details]
     })
