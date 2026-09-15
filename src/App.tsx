@@ -258,6 +258,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [showNewLead, setShowNewLead] = useState(false)
   const [siblingModalFor, setSiblingModalFor] = useState<Lead | null>(null)
   const [unenrollPromptId, setUnenrollPromptId] = useState<string | null>(null)
+  const [didNotConvertPromptId, setDidNotConvertPromptId] = useState<string | null>(null)
   const [deferPromptFor, setDeferPromptFor] = useState<DeferPromptState | null>(null)
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null)
   const [pendingUndos, setPendingUndos] = useState<{ key: string; label: string; timerId: number; leadId?: string; revert: () => void }[]>([])
@@ -477,16 +478,20 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     )
   }
   const resolveTrialNo = (lead: Lead, comment: string) => {
-    const activity: Activity = { id: crypto.randomUUID(), type: 'note', occurredAt: new Date().toISOString(), outcome: comment.trim() }
+    const occurredAt = new Date().toISOString()
+    const statusActivity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt, outcome: 'Trial completed — did not become a student' }
+    const noteActivity: Activity = { id: crypto.randomUUID(), type: 'note', occurredAt, outcome: comment.trim() }
+    const leadUpdate: Partial<Lead> = { trialAt: undefined, holdFormComplete: false, trialAttended: false }
     const previousLead = lead
     queueReversible(
-      `trial-${activity.id}`,
-      `Note added — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, activities: [...item.activities, activity] } : item)),
+      `trial-${statusActivity.id}`,
+      `Didn't become a student — ${lead.name}`,
+      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, statusActivity, ...(comment.trim() ? [noteActivity] : [])] } : item)),
       () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(saveActivity(lead.id, activity)),
+      () => persist(Promise.all([saveActivity(lead.id, statusActivity), ...(comment.trim() ? [saveActivity(lead.id, noteActivity)] : []), updateLead(lead.id, leadUpdate)])),
       lead.id,
     )
+    setDidNotConvertPromptId(lead.id)
   }
   const resolveSecondTrial = (lead: Lead, instructorId: string, occurredAtInput: string) => {
     const iso = new Date(occurredAtInput).toISOString()
@@ -706,6 +711,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {siblingModalFor && <AddSiblingModal parent={siblingModalFor} instruments={offeredInstruments} onClose={() => setSiblingModalFor(null)} onSave={(input) => addSibling(siblingModalFor, input)} />}
       {unenrollPromptId && <ScheduleFollowUpModal lead={leads.find((lead) => lead.id === unenrollPromptId)!} title="When should we check back in?" description="They'll sit in Action Pending starting that day, until you mark it done." cancelLabel="Skip" defaultNote="Check in about re-enrolling" defaultOffsetDays={60} onCancel={() => setUnenrollPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(unenrollPromptId, note, atIso); setUnenrollPromptId(null) }} />}
+      {didNotConvertPromptId && <ScheduleFollowUpModal lead={leads.find((lead) => lead.id === didNotConvertPromptId)!} title="Follow up with them?" description="They'll show up in Next Actions starting that day so you don't lose track of them." cancelLabel="Skip" defaultNote="Check back in after their trial" defaultOffsetDays={7} onCancel={() => setDidNotConvertPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(didNotConvertPromptId, note, atIso); setDidNotConvertPromptId(null) }} />}
       {deferPromptFor && <DeferModal lead={deferPromptFor.lead} canSkip={deferPromptFor.kind === 'active' || deferPromptFor.kind === 'nurture'} callLogged={deferPromptFor.callLogged} textLogged={deferPromptFor.textLogged} onCancel={() => setDeferPromptFor(null)} onPauseCadence={(note, atIso) => { pauseCadence(deferPromptFor.lead.id, atIso, note); setDeferPromptFor(null) }} onDeferOutside={(note, atIso) => { scheduleFollowUp(deferPromptFor.lead.id, note, atIso); setDeferPromptFor(null) }} onSkip={(part) => { if (part !== 'text') logActivity(deferPromptFor.lead.id, 'call', 'Skipped for this cadence step'); if (part !== 'call') logActivity(deferPromptFor.lead.id, 'text', 'Skipped for this cadence step'); setDeferPromptFor(null) }} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
