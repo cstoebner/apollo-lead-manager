@@ -178,11 +178,10 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
   }
 
   const offset = OFFSETS[stage] ?? 8
-  const baseline = new Date(new Date(lead.receivedAt).getTime() + offset * DAY)
-  const recent = progress.lastCompletedAt
   const previousOffset = OFFSETS[Math.max(0, stage - 1)] ?? 0
   const interval = Math.max(1, offset - previousOffset)
-  if (recent && baseline.getTime() <= recent) baseline.setTime(recent + interval * DAY)
+  const anchor = progress.lastCompletedAt ?? Date.parse(lead.receivedAt)
+  const baseline = new Date(anchor + interval * DAY)
   if (baseline < now) baseline.setTime(now.getTime())
 
   return {
