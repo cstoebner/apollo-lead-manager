@@ -2112,11 +2112,12 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     onOpeningsChange(openings.filter((opening) => {
       if (opening.instructor !== instructor.name) return true
       const openingDate = new Date(opening.startsAt)
+      const openingTime = `${String(openingDate.getHours()).padStart(2, '0')}:${String(openingDate.getMinutes()).padStart(2, '0')}`
+      const withinNewEntry = timeMinutes(openingTime) >= timeMinutes(time) && timeMinutes(openingTime) < timeMinutes(time) + duration
       if (next.kind === 'regular') {
-        const openingTime = `${String(openingDate.getHours()).padStart(2, '0')}:${String(openingDate.getMinutes()).padStart(2, '0')}`
-        return openingDate.getDay() !== next.dayOfWeek || openingTime !== next.startTime || localDateKey(openingDate) < next.startsOn!
+        return openingDate.getDay() !== next.dayOfWeek || !withinNewEntry || localDateKey(openingDate) < next.startsOn!
       }
-      return openingDate.getTime() !== date.getTime()
+      return openingDate.toDateString() !== date.toDateString() || !withinNewEntry
     }))
     onScheduleLog({
       action: existing ? 'Scheduled lesson updated' : 'Scheduled lesson added',
