@@ -1814,6 +1814,22 @@ function timesOverlap(firstTime: string, firstDuration: number, secondTime: stri
   return firstStart < secondStart + secondDuration && secondStart < firstStart + firstDuration
 }
 
+function findConsecutiveBlock(entries: ScheduleEntry[], instructorId: string, date: Date, proposedStart: number, proposedDuration: number, excludeEntryId?: string): [number, number] | undefined {
+  const proposedEnd = proposedStart + proposedDuration
+  const sameDayIntervals: [number, number][] = entries
+    .filter((entry) => entry.id !== excludeEntryId && entry.instructorId === instructorId && entryOccursOnDate(entry, date))
+    .map((entry): [number, number] => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
+  sameDayIntervals.push([proposedStart, proposedEnd])
+  sameDayIntervals.sort((a, b) => a[0] - b[0])
+  const mergedIntervals: [number, number][] = []
+  for (const [start, end] of sameDayIntervals) {
+    const last = mergedIntervals[mergedIntervals.length - 1]
+    if (last && start - last[1] < 15) last[1] = Math.max(last[1], end)
+    else mergedIntervals.push([start, end])
+  }
+  return mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
+}
+
 function entryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
   return entries.find((entry) => entry.instructorId === instructorId && entryOccursOnDate(entry, date) && entryStartTime(entry) === time)
 }
@@ -1903,19 +1919,7 @@ function bookTrialEntry(instructor: Instructor, allEntries: ScheduleEntry[], ava
   }
 
   const proposedStart = timeMinutes(time)
-  const proposedEnd = proposedStart + durationMinutes
-  const sameDayIntervals: [number, number][] = entries
-    .filter((entry) => entry.instructorId === instructor.id && entryOccursOnDate(entry, date))
-    .map((entry) => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
-  sameDayIntervals.push([proposedStart, proposedEnd])
-  sameDayIntervals.sort((a, b) => a[0] - b[0])
-  const mergedIntervals: [number, number][] = []
-  for (const [start, end] of sameDayIntervals) {
-    const last = mergedIntervals[mergedIntervals.length - 1]
-    if (last && start - last[1] < 15) last[1] = Math.max(last[1], end)
-    else mergedIntervals.push([start, end])
-  }
-  const block = mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
+  const block = findConsecutiveBlock(entries, instructor.id, date, proposedStart, durationMinutes)
   const blockMinutes = block ? block[1] - block[0] : durationMinutes
 
   if (blockMinutes > 225) {
@@ -2005,6 +2009,14 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       onOpeningsChange(openings.filter((opening) => opening.id !== existing.id))
       onScheduleLog({ action: 'Trial opening removed', instructor: instructor.name, details: `${formatTrialTime(startsAt)} · ${instructor.instruments.join(' / ')}` })
     } else {
+      const proposedStart = timeMinutes(time)
+      const block = findConsecutiveBlock(entries, instructor.id, date, proposedStart, 30)
+      const blockMinutes = block ? block[1] - block[0] : 30
+      if (blockMinutes > 210) {
+        const hours = (blockMinutes / 60).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+        window.alert(`This would give ${instructor.name} ${hours} consecutive hours with no break of 15+ minutes on ${date.toLocaleDateString('en-US')}. Trial openings aren't allowed past 3.5 consecutive hours — add a break first if you want to offer this time.`)
+        return
+      }
       onOpeningsChange([...openings, { id: crypto.randomUUID(), instructor: instructor.name, instruments: instructor.instruments, startsAt: startsAt.toISOString() }])
       onScheduleLog({ action: 'Trial opening added', instructor: instructor.name, details: `${formatTrialTime(startsAt)} · ${instructor.instruments.join(' / ')}` })
     }
@@ -2063,19 +2075,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     if (conflictingEntry) { window.alert(conflictingEntry.kind === 'vacation' ? `${instructor.name} is on vacation that day.` : `That lesson overlaps ${conflictingEntry.studentName}'s scheduled time.`); return }
     const duration = next.durationMinutes ?? 30
     const proposedStart = timeMinutes(time)
-    const proposedEnd = proposedStart + duration
-    const sameDayIntervals: [number, number][] = entries
-      .filter((entry) => entry.id !== next.id && entry.instructorId === instructor.id && entryOccursOnDate(entry, date))
-      .map((entry) => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
-    sameDayIntervals.push([proposedStart, proposedEnd])
-    sameDayIntervals.sort((a, b) => a[0] - b[0])
-    const mergedIntervals: [number, number][] = []
-    for (const [start, end] of sameDayIntervals) {
-      const last = mergedIntervals[mergedIntervals.length - 1]
-      if (last && start - last[1] < 15) last[1] = Math.max(last[1], end)
-      else mergedIntervals.push([start, end])
-    }
-    const block = mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
+    const block = findConsecutiveBlock(entries, instructor.id, date, proposedStart, duration, next.id)
     const blockMinutes = block ? block[1] - block[0] : duration
     let autoBreak: ScheduleEntry | null = null
     let autoBreakTime = ''
