@@ -366,9 +366,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `log-${activity.id}`,
       `Logged ${type === 'call' ? 'call' : type === 'text' ? 'text' : 'note'}${lead ? ` — ${lead.name}` : ''}`,
-      () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: item.activities.filter((a) => a.id !== activity.id) } : item)),
-      () => persist(saveActivity(id, activity)),
+      () => { setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: [...item.activities, activity] } : item)); persist(saveActivity(id, activity)) },
+      () => { setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: item.activities.filter((a) => a.id !== activity.id) } : item)); persist(removeStoredActivity(activity.id)) },
       id,
     )
   }
@@ -430,16 +429,14 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `log-${activity.id}`,
       `Added note${lead ? ` — ${lead.name}` : ''}`,
-      () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: item.activities.filter((a) => a.id !== activity.id) } : item)),
-      () => persist(saveActivity(id, activity)),
+      () => { setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: [...item.activities, activity] } : item)); persist(saveActivity(id, activity)) },
+      () => { setLeads((current) => current.map((item) => item.id === id ? { ...item, activities: item.activities.filter((a) => a.id !== activity.id) } : item)); persist(removeStoredActivity(activity.id)) },
       id,
     )
   }
-  const queueReversible =(key: string, label: string, apply: () => void, revert: () => void, commit: () => void, leadId?: string) => {
+  const queueReversible = (key: string, label: string, apply: () => void, revert: () => void, leadId?: string) => {
     apply()
     const timerId = window.setTimeout(() => {
-      commit()
       setPendingUndos((current) => current.filter((item) => item.key !== key))
     }, 10_000)
     setPendingUndos((current) => [...current, { key, label, timerId, leadId, revert }])
@@ -471,9 +468,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `trial-${activity.id}`,
       `${copy.outcome} — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)); persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])) },
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)); persist(Promise.all([removeStoredActivity(activity.id), saveLead(previousLead)])) },
       lead.id,
     )
   }
@@ -486,9 +482,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `trial-${statusActivity.id}`,
       `Didn't become a student — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, statusActivity, ...(comment.trim() ? [noteActivity] : [])] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(Promise.all([saveActivity(lead.id, statusActivity), ...(comment.trim() ? [saveActivity(lead.id, noteActivity)] : []), updateLead(lead.id, leadUpdate)])),
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, statusActivity, ...(comment.trim() ? [noteActivity] : [])] } : item)); persist(Promise.all([saveActivity(lead.id, statusActivity), ...(comment.trim() ? [saveActivity(lead.id, noteActivity)] : []), updateLead(lead.id, leadUpdate)])) },
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)); persist(Promise.all([removeStoredActivity(statusActivity.id), ...(comment.trim() ? [removeStoredActivity(noteActivity.id)] : []), saveLead(previousLead)])) },
       lead.id,
     )
     setDidNotConvertPromptId(lead.id)
@@ -502,9 +497,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `trial-${activity.id}`,
       `Second trial scheduled — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)); persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])) },
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)); persist(Promise.all([removeStoredActivity(activity.id), saveLead(previousLead)])) },
       lead.id,
     )
   }
@@ -515,9 +509,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `agreement-${activity.id}`,
       `Signature collected — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)); persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])) },
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)); persist(Promise.all([removeStoredActivity(activity.id), saveLead(previousLead)])) },
       lead.id,
     )
   }
@@ -528,9 +521,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `agreement-${activity.id}`,
       `Signature requirement overridden — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)); persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])) },
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)); persist(Promise.all([removeStoredActivity(activity.id), saveLead(previousLead)])) },
       lead.id,
     )
   }
@@ -559,9 +551,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `followup-${activity.id}`,
       `Follow-up resolved — ${lead.name}`,
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)),
-      () => setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)),
-      () => persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])),
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item)); persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)])) },
+      () => { setLeads((current) => current.map((item) => item.id === lead.id ? previousLead : item)); persist(Promise.all([removeStoredActivity(activity.id), saveLead(previousLead)])) },
       lead.id,
     )
   }
@@ -624,9 +615,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `esst-hours-${entry.id}`,
       `Hours worked logged${instructor ? ` — ${instructor.name}` : ''}`,
-      () => setEsstHoursEntries((current) => [...current, entry]),
-      () => setEsstHoursEntries((current) => current.filter((item) => item.id !== entry.id)),
-      () => persist(saveEsstHoursEntry(entry)),
+      () => { setEsstHoursEntries((current) => [...current, entry]); persist(saveEsstHoursEntry(entry)) },
+      () => { setEsstHoursEntries((current) => current.filter((item) => item.id !== entry.id)); persist(removeStoredEsstHoursEntry(entry.id)) },
     )
   }
   const deleteEsstHours = (id: string) => { setEsstHoursEntries((current) => current.filter((item) => item.id !== id)); persist(removeStoredEsstHoursEntry(id)) }
@@ -636,9 +626,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     queueReversible(
       `esst-usage-${entry.id}`,
       `Sick/safe time logged${instructor ? ` — ${instructor.name}` : ''}`,
-      () => setEsstUsageEntries((current) => [...current, entry]),
-      () => setEsstUsageEntries((current) => current.filter((item) => item.id !== entry.id)),
-      () => persist(saveEsstUsageEntry(entry)),
+      () => { setEsstUsageEntries((current) => [...current, entry]); persist(saveEsstUsageEntry(entry)) },
+      () => { setEsstUsageEntries((current) => current.filter((item) => item.id !== entry.id)); persist(removeStoredEsstUsageEntry(entry.id)) },
     )
   }
   const deleteEsstUsage = (id: string) => { setEsstUsageEntries((current) => current.filter((item) => item.id !== id)); persist(removeStoredEsstUsageEntry(id)) }
@@ -715,7 +704,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       {deferPromptFor && <DeferModal lead={deferPromptFor.lead} canSkip={deferPromptFor.kind === 'active' || deferPromptFor.kind === 'nurture'} callLogged={deferPromptFor.callLogged} textLogged={deferPromptFor.textLogged} onCancel={() => setDeferPromptFor(null)} onPauseCadence={(note, atIso) => { pauseCadence(deferPromptFor.lead.id, atIso, note); setDeferPromptFor(null) }} onDeferOutside={(note, atIso) => { scheduleFollowUp(deferPromptFor.lead.id, note, atIso); setDeferPromptFor(null) }} onSkip={(part) => { if (part !== 'text') logActivity(deferPromptFor.lead.id, 'call', 'Skipped for this cadence step'); if (part !== 'call') logActivity(deferPromptFor.lead.id, 'text', 'Skipped for this cadence step'); setDeferPromptFor(null) }} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
       {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
-      {pendingUndos.length > 0 && <div className="undo-toast" role="status"><span>{pendingUndos[pendingUndos.length - 1].label}. Saving in 10 seconds.</span><button onClick={() => undoPending(pendingUndos[pendingUndos.length - 1].key)}>Undo</button></div>}
+      {pendingUndos.length > 0 && <div className="undo-toast" role="status"><span>{pendingUndos[pendingUndos.length - 1].label}. Undo within 10 seconds.</span><button onClick={() => undoPending(pendingUndos[pendingUndos.length - 1].key)}>Undo</button></div>}
     </div>
   )
 }
