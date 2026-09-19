@@ -2382,7 +2382,8 @@ function FollowUpComposer({ lead, onSchedule, onResolve }: { lead: Lead; onSched
   if (lead.followUpAt) {
     return <div className="follow-up-box"><strong>Follow up on {formatDate(new Date(lead.followUpAt))}</strong>{lead.followUpNote && <p>{lead.followUpNote}</p>}<button type="button" className="secondary" onClick={onResolve}>✓ Done — clear follow-up</button></div>
   }
-  return <div className="note-composer"><label className="field">Follow up on a later date<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember to follow up about?" /></label><label className="field">Date<input type="datetime-local" value={date} onChange={(event) => setDate(event.target.value)} /></label><button type="button" className="secondary" disabled={!note.trim() || !date} onClick={() => onSchedule(note.trim(), new Date(date).toISOString())}>📅 Schedule follow-up</button></div>
+  const disabledReason = !note.trim() ? 'Add a note above to schedule this follow-up.' : !date ? 'Choose a date above to schedule this follow-up.' : null
+  return <div className="note-composer"><label className="field">Follow up on a later date<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} placeholder="What do you want to remember to follow up about?" /></label><label className="field">Date<input type="datetime-local" value={date} onChange={(event) => setDate(event.target.value)} /></label><button type="button" className="secondary" disabled={!note.trim() || !date} onClick={() => onSchedule(note.trim(), new Date(date).toISOString())}>📅 Schedule follow-up</button>{disabledReason && <small className="muted">{disabledReason}</small>}</div>
 }
 
 function QuickNoteModal({ lead, onClose, onSave }: { lead: Lead; onClose: () => void; onSave: (note: string) => void }) {
