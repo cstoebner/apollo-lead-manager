@@ -25,18 +25,41 @@ const assertOk = (error: { message: string } | null) => {
 
 const shortTime = (value?: string | null) => value ? value.slice(0, 5) : undefined
 
+// PostgREST caps rows per request (commonly 1000) unless explicitly paginated. Without this,
+// a table that grows past that cap silently drops everything past the cutoff on every load —
+// with ascending order, that means the newest rows (recent activity) are the ones that vanish.
+const PAGE_SIZE = 1000
+
+async function fetchAllRows(
+  db: ReturnType<typeof client>,
+  table: string,
+  orderColumn: string,
+  ascending: boolean,
+): Promise<{ data: any[] | null; error: { message: string } | null }> {
+  const rows: any[] = []
+  let from = 0
+  for (;;) {
+    const { data, error } = await db.from(table).select('*').order(orderColumn, { ascending }).range(from, from + PAGE_SIZE - 1)
+    if (error) return { data: null, error }
+    if (!data || data.length === 0) break
+    rows.push(...data)
+    from += data.length
+  }
+  return { data: rows, error: null }
+}
+
 export async function loadWorkspaceData(): Promise<WorkspaceData> {
   const db = client()
   const [leadResult, activityResult, instructorResult, availabilityResult, entryResult, openingResult, scheduleActivityResult, esstHoursResult, esstUsageResult, settingsResult] = await Promise.all([
-    db.from('leads').select('*').order('received_at', { ascending: false }),
-    db.from('activities').select('*').order('occurred_at', { ascending: true }),
-    db.from('instructors').select('*').order('name', { ascending: true }),
-    db.from('instructor_availability').select('*'),
-    db.from('schedule_entries').select('*'),
-    db.from('trial_openings').select('*').order('starts_at', { ascending: true }),
-    db.from('schedule_activities').select('*').order('occurred_at', { ascending: true }),
-    db.from('esst_hours_entries').select('*').order('period_ends_on', { ascending: true }),
-    db.from('esst_usage_entries').select('*').order('used_on', { ascending: true }),
+    fetchAllRows(db, 'leads', 'received_at', false),
+    fetchAllRows(db, 'activities', 'occurred_at', true),
+    fetchAllRows(db, 'instructors', 'name', true),
+    fetchAllRows(db, 'instructor_availability', 'id', true),
+    fetchAllRows(db, 'schedule_entries', 'id', true),
+    fetchAllRows(db, 'trial_openings', 'starts_at', true),
+    fetchAllRows(db, 'schedule_activities', 'occurred_at', true),
+    fetchAllRows(db, 'esst_hours_entries', 'period_ends_on', true),
+    fetchAllRows(db, 'esst_usage_entries', 'used_on', true),
     db.from('app_settings').select('*').maybeSingle(),
   ])
 
