@@ -6,6 +6,7 @@ import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
 import { loadWorkspaceData, removeActivity as removeStoredActivity, removeEsstHoursEntry as removeStoredEsstHoursEntry, removeEsstUsageEntry as removeStoredEsstUsageEntry, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveEsstHoursEntry, saveEsstUsageEntry, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
+import type { WorkspaceData } from './database'
 import { ESST_ACCRUAL_DIVISOR, ESST_BALANCE_CAP, esstSummaryFor } from './esst'
 import { applyTemplate, defaultMessageTemplates, messageTemplateGroups } from './messageTemplates'
 import { nurtureMessageFor } from './nurtureTemplates'
@@ -39,6 +40,7 @@ const touchCount = (lead: Lead) => lead.activities.filter((activity) => activity
 const effectiveNowFor = (lead: Lead) => lead.cadenceShiftDays ? new Date(Date.now() - lead.cadenceShiftDays * 86_400_000) : new Date()
 const isCadencePaused = (lead: Lead) => Boolean(lead.cadencePauseUntil && Date.parse(lead.cadencePauseUntil) > Date.now())
 const hotPriority = (lead: Lead) => (lead.status === 'hot' ? 0 : 1)
+const isAuthLikeError = (message: string) => /jwt|token/i.test(message)
 const TRIAL_BOOKED_PATTERN = /^(Trial lesson booked|Trial booked for|Trial rescheduled to|Second trial lesson scheduled)/
 const trialBookedAt = (lead: Lead): Date => {
   const match = [...lead.activities].reverse().find((activity) => activity.type === 'trial_update' && TRIAL_BOOKED_PATTERN.test(activity.outcome))
@@ -266,7 +268,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
 
   useEffect(() => {
     if (!isSupabaseConfigured) return
-    void loadWorkspaceData().then((data) => {
+    const applyWorkspaceData = (data: WorkspaceData) => {
       const createdActivities = data.leads.flatMap((lead) => lead.activities.some((activity) => activity.type === 'lead_created') ? [] : [{
         leadId: lead.id,
         activity: { id: crypto.randomUUID(), type: 'lead_created' as const, occurredAt: lead.receivedAt, outcome: 'New lead received' },
@@ -286,11 +288,40 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
       setMessageTemplates({ ...defaultMessageTemplates, ...(data.messageTemplates ?? {}) })
       setLoadingData(false)
-    }).catch((error: Error) => { setDataError(error.message); setLoadingData(false) })
+    }
+    void loadWorkspaceData().then(applyWorkspaceData).catch(async (error: Error) => {
+      if (!isAuthLikeError(error.message)) { setDataError(error.message); setLoadingData(false); return }
+      const { error: refreshError } = await supabase!.auth.refreshSession()
+      if (refreshError) { setDataError(error.message); setLoadingData(false); return }
+      try {
+        applyWorkspaceData(await loadWorkspaceData())
+      } catch (retryError) {
+        setDataError((retryError as Error).message)
+        setLoadingData(false)
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    const refreshIfVisible = () => { if (document.visibilityState === 'visible') void supabase!.auth.refreshSession() }
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    window.addEventListener('focus', refreshIfVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+      window.removeEventListener('focus', refreshIfVisible)
+    }
   }, [])
 
   const persist = (work: Promise<unknown>) => {
-    if (isSupabaseConfigured) void work.catch((error: Error) => setDataError(`Your change is still visible here, but could not be saved: ${error.message}`))
+    if (isSupabaseConfigured) void work.catch((error: Error) => {
+      if (isAuthLikeError(error.message)) {
+        void supabase!.auth.refreshSession()
+        setDataError(`Your session needed to refresh, so this change may not have saved — please check and redo it if needed: ${error.message}`)
+      } else {
+        setDataError(`Your change is still visible here, but could not be saved: ${error.message}`)
+      }
+    })
   }
 
   const startText: StartText = (lead, template) => {
