@@ -246,7 +246,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [view, setView] = useState<View>('today')
   const [leads, setLeads] = useState(isSupabaseConfigured ? [] : demoLeads)
   const [offeredInstruments, setOfferedInstruments] = useState(defaultInstruments)
-  const [messageTemplates, setMessageTemplates] = useState(defaultMessageTemplates)
+  const [messageTemplateOverrides, setMessageTemplateOverrides] = useState<Record<string, string>>({})
+  const messageTemplates = useMemo(() => ({ ...defaultMessageTemplates, ...messageTemplateOverrides }), [messageTemplateOverrides])
   const [instructors, setInstructors] = useState(isSupabaseConfigured ? [] : demoInstructors)
   const [trialOpenings, setTrialOpenings] = useState(isSupabaseConfigured ? [] : demoTrialOpenings)
   const [instructorAvailability, setInstructorAvailability] = useState(isSupabaseConfigured ? [] : demoInstructorAvailability)
@@ -287,7 +288,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setEsstHoursEntries(data.esstHoursEntries)
       setEsstUsageEntries(data.esstUsageEntries)
       setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
-      setMessageTemplates({ ...defaultMessageTemplates, ...(data.messageTemplates ?? {}) })
+      setMessageTemplateOverrides(data.messageTemplates ?? {})
       setLoadingData(false)
     }
     void loadWorkspaceData().then(applyWorkspaceData).catch(async (error: Error) => {
@@ -634,8 +635,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     persist(saveScheduleActivity(activity, instructors.find((item) => item.name === input.instructor)?.id))
   }
   const replaceInstruments = (next: string[]) => { setOfferedInstruments(next); persist(saveSettings(next)) }
-  const saveMessageTemplate = (key: string, value: string) => { setMessageTemplates((current) => { const next = { ...current, [key]: value }; persist(saveMessageTemplates(next)); return next }) }
-  const resetMessageTemplate = (key: string) => { setMessageTemplates((current) => { const next = { ...current, [key]: defaultMessageTemplates[key] }; persist(saveMessageTemplates(next)); return next }) }
+  const saveMessageTemplate = (key: string, value: string) => { setMessageTemplateOverrides((current) => { const next = { ...current, [key]: value }; persist(saveMessageTemplates(next)); return next }) }
+  const resetMessageTemplate = (key: string) => { setMessageTemplateOverrides((current) => { const next = { ...current }; delete next[key]; persist(saveMessageTemplates(next)); return next }) }
   const replaceInstructors = (next: Instructor[]) => { const previous = instructors; setInstructors(next); persist(syncInstructors(previous, next)) }
   const replaceAvailability = (next: InstructorAvailability[]) => { const previous = instructorAvailability; setInstructorAvailability(next); persist(syncAvailability(previous, next)) }
   const replaceEntries = (next: ScheduleEntry[]) => { const previous = scheduleEntries; setScheduleEntries(next); persist(syncEntries(previous, next)) }
