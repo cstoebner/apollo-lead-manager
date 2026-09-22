@@ -93,6 +93,7 @@ const trialFormReminderFor = (lead: Lead, templates: Record<string, string> = de
     studentPossessive: lead.studentName && lead.studentName !== lead.name ? `${lead.studentName}'s` : 'your',
     instrument: leadInstrumentText(lead),
     trialTime: formatTrialTime(lead.trialAt!),
+    deadline: formatTrialTime(new Date(trialBookedAt(lead).getTime() + 24 * 60 * 60 * 1000)),
   }),
 })
 

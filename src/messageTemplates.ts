@@ -13,7 +13,7 @@ export const defaultMessageTemplates: Record<string, string> = {
   nurture_week10: 'Hi {{firstName}}, are you still thinking about {{instrument}} lessons?\n\n1️⃣ Yes, I’d like to schedule a free trial\n2️⃣ Maybe later\n3️⃣ I’m no longer interested\n4️⃣ I have a question\n\nJust reply with the number that fits best.',
   nurture_week12: 'Hi {{firstName}}, I wanted to make one last regular check-in about {{instrument}} lessons. Apollo will be here whenever the timing is right.\n\nAfter this, I’ll only reach out occasionally when relevant openings or new scheduling options come up. If you’d rather not receive those updates, just let me know.',
   nurture_long_term: 'Hi {{firstName}}, a couple of {{instrument}} trial openings have become available, so I wanted to check with you:\n\n1️⃣ [Day/Time 1]\n2️⃣ [Day/Time 2]\n\nWould either work for you?',
-  trial_form_reminder: 'Hi {{firstName}},\n\nThe last step to confirm {{studentPossessive}} free {{instrument}} trial lesson on {{trialTime}} is to complete our registration form and reserve the time.\n\nWe do require a credit card on file to hold the appointment. The lesson itself is completely free; the card would only be charged the $35 fee if the lesson is canceled or rescheduled with less than 24 hours’ notice or if the student does not attend.\n\nPlease let me know if you need the registration link again or have any questions. I’m happy to help!',
+  trial_form_reminder: 'Hi {{firstName}}, I’m still holding {{trialTime}} until {{deadline}}, but I haven’t seen the registration form come through yet.\n\nIf you’d like to keep the trial time, please complete it by then. Otherwise, I’ll release the appointment and we can look at other options when you’re ready.',
 }
 
 export const messageTemplateGroups: { title: string; items: { key: string; label: string; variables: string[] }[] }[] = [
@@ -44,7 +44,7 @@ export const messageTemplateGroups: { title: string; items: { key: string; label
   {
     title: 'Trial reminders',
     items: [
-      { key: 'trial_form_reminder', label: 'Booking form reminder', variables: ['firstName', 'studentPossessive', 'instrument', 'trialTime'] },
+      { key: 'trial_form_reminder', label: 'Booking form reminder', variables: ['firstName', 'trialTime', 'deadline', 'studentPossessive', 'instrument'] },
     ],
   },
 ]
