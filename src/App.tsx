@@ -1847,10 +1847,17 @@ function timesOverlap(firstTime: string, firstDuration: number, secondTime: stri
   return firstStart < secondStart + secondDuration && secondStart < firstStart + firstDuration
 }
 
+const AUTO_BREAK_THRESHOLD_MINUTES = 210
+
+// Breaks and vacation days are time off, not teaching — they must not count toward (or bridge across) consecutive teaching hours.
+function isConsecutiveHoursEntry(entry: ScheduleEntry) {
+  return entry.kind !== 'break' && entry.kind !== 'vacation'
+}
+
 function findConsecutiveBlock(entries: ScheduleEntry[], instructorId: string, date: Date, proposedStart: number, proposedDuration: number, excludeEntryId?: string): [number, number] | undefined {
   const proposedEnd = proposedStart + proposedDuration
   const sameDayIntervals: [number, number][] = entries
-    .filter((entry) => entry.id !== excludeEntryId && entry.instructorId === instructorId && entryOccursOnDate(entry, date))
+    .filter((entry) => entry.id !== excludeEntryId && entry.instructorId === instructorId && isConsecutiveHoursEntry(entry) && entryOccursOnDate(entry, date))
     .map((entry): [number, number] => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
   sameDayIntervals.push([proposedStart, proposedEnd])
   sameDayIntervals.sort((a, b) => a[0] - b[0])
@@ -1861,6 +1868,34 @@ function findConsecutiveBlock(entries: ScheduleEntry[], instructorId: string, da
     else mergedIntervals.push([start, end])
   }
   return mergedIntervals.find(([start, end]) => proposedStart < end && proposedEnd > start)
+}
+
+// Finds the slot right after any block of AUTO_BREAK_THRESHOLD_MINUTES+ of continuous teaching, so the grid can
+// show it as a break instead of misleadingly offering it as open (it would be blocked/confirmed anyway if used).
+function computeAutoBreakSlots(entries: ScheduleEntry[], instructorId: string, date: Date): Set<string> {
+  const workBlocks: [number, number][] = entries
+    .filter((entry) => entry.instructorId === instructorId && isConsecutiveHoursEntry(entry) && entryOccursOnDate(entry, date))
+    .map((entry): [number, number] => { const start = timeMinutes(entryStartTime(entry)); return [start, start + (entry.durationMinutes ?? 30)] })
+    .sort((a, b) => a[0] - b[0])
+    .reduce<[number, number][]>((blocks, [start, end]) => {
+      const last = blocks[blocks.length - 1]
+      if (last && start - last[1] < 15) last[1] = Math.max(last[1], end)
+      else blocks.push([start, end])
+      return blocks
+    }, [])
+
+  const autoBreaks = new Set<string>()
+  workBlocks.filter(([start, end]) => end - start >= AUTO_BREAK_THRESHOLD_MINUTES).forEach(([, end]) => {
+    const alreadyOccupied = entries.some((entry) => {
+      if (entry.instructorId !== instructorId || !entryOccursOnDate(entry, date)) return false
+      const start = timeMinutes(entryStartTime(entry))
+      return end >= start && end < start + (entry.durationMinutes ?? 30)
+    })
+    if (alreadyOccupied) return
+    const label = `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`
+    if (scheduleTimes.includes(label)) autoBreaks.add(label)
+  })
+  return autoBreaks
 }
 
 function entryAtSlot(entries: ScheduleEntry[], instructorId: string, date: Date, time: string) {
@@ -2030,6 +2065,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
 
   const weekDates = scheduleDays.map((_, index) => datePlusDays(weekStart, index))
   const instructorOpenings = openings.filter((opening) => opening.instructor === instructor.name && Date.parse(opening.startsAt) > Date.now())
+  const autoBreaksByDate = new Map(weekDates.map((date) => [localDateKey(date), computeAutoBreakSlots(entries, instructor.id, date)]))
 
   const changeInstructor = (id: string) => {
     setInstructorId(id); setSlotEditor(null)
@@ -2045,7 +2081,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       const proposedStart = timeMinutes(time)
       const block = findConsecutiveBlock(entries, instructor.id, date, proposedStart, 30)
       const blockMinutes = block ? block[1] - block[0] : 30
-      if (blockMinutes > 210) {
+      if (blockMinutes > AUTO_BREAK_THRESHOLD_MINUTES) {
         const hours = (blockMinutes / 60).toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
         window.alert(`This would give ${instructor.name} ${hours} consecutive hours with no break of 15+ minutes on ${date.toLocaleDateString('en-US')}. Trial openings aren't allowed past 3.5 consecutive hours — add a break first if you want to offer this time.`)
         return
@@ -2235,9 +2271,11 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
             const upcoming = upcomingEntriesAtSlot(entries, instructor.id, date, time)
             const upcomingContinuation = entry ? [] : upcomingEntryCoversSlot(entries, instructor.id, date, time).filter((item) => !upcoming.includes(item))
             const past = startsAt < new Date()
-            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : entry.kind === 'break' ? 'break' : entry.kind === 'vacation' ? 'vacation' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
+            const isAutoBreak = !entry && !skippedRegular && !opening && available && (autoBreaksByDate.get(localDateKey(date))?.has(time) ?? false)
+            const className = `${entry ? `schedule-cell ${entry.kind === 'regular' ? 'regular' : entry.kind === 'break' ? 'break' : entry.kind === 'vacation' ? 'vacation' : 'dated'}${entryStartsHere ? ' entry-start' : ' entry-continuation'}` : skippedRegular ? 'schedule-cell absence' : opening ? 'schedule-cell offered' : isAutoBreak ? 'schedule-cell break auto-break' : available ? `schedule-cell open${past ? ' past' : ''}` : 'schedule-cell unavailable'}${time === hoveredTime ? ' row-hovered' : ''}`
             return <div className={className} key={`${localDateKey(date)}-${time}`} onMouseEnter={() => setHoveredTime(time)} onMouseLeave={() => setHoveredTime((current) => current === time ? null : current)}>
               {entry ? <><button type="button" className="cell-main" aria-label={entry.kind === 'break' ? 'Remove break' : entry.kind === 'vacation' ? 'Remove vacation day' : `Edit ${entry.studentName}`} onClick={() => entry.kind === 'break' || entry.kind === 'vacation' ? setRemoveChoice({ entry, date }) : setSlotEditor({ date, time: entryStartTime(entry), entry })}>{(entryStartsHere || entry.kind === 'vacation') && <><strong>{entry.kind === 'regular' ? '🔒 ' : entry.kind === 'break' ? '☕ ' : entry.kind === 'vacation' ? '🌴 ' : ''}{entry.kind === 'vacation' ? 'Vacation' : entry.studentName}</strong><small>{entry.kind === 'vacation' ? 'Tap to remove' : <>{entry.kind === 'regular' ? 'Regular' : entry.kind === 'trial' ? 'Trial' : entry.kind === 'break' ? 'Tap to remove' : 'One-time'} · {entry.durationMinutes ?? 30} min{entry.kind === 'regular' && entry.repeatIntervalWeeks === 2 ? ' · Biweekly' : ''}</>}</small></>}</button>{entryStartsHere && <UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />}</>
+                : isAutoBreak ? <span className="cell-main"><strong>☕ Break</strong><small>Auto · after {(AUTO_BREAK_THRESHOLD_MINUTES / 60).toString().replace(/\.0$/, '')} consecutive hrs</small></span>
                 : available ? <><button type="button" disabled={past} className="cell-main" onClick={() => toggleOpening(date, time)}>{opening ? <><strong>✓ Trial opening</strong><small>{opening.instruments.join(' / ')}</small></> : skippedRegular ? <><strong>Open this week</strong><small>{skippedRegular.startTime === time ? `${skippedRegular.studentName} absent` : `See above · ${skippedRegular.studentName}`}</small></> : biweeklyOff ? <><strong>Open this week</strong><small>{biweeklyOff.startTime === time ? `${biweeklyOff.studentName} · next ${datePlusDays(date, 7).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : `See above · ${biweeklyOff.studentName}`}</small></> : <span>{past ? '' : 'Open'}</span>}</button><UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} />{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">See above · {upcomingContinuation[0].studentName}</small>}{!past && <button type="button" className="cell-add" title="Schedule a student here" onClick={() => setSlotEditor({ date, time })}>＋</button>}{skippedRegular && skippedRegular.startTime === time && !past && <button type="button" className="cell-restore" title={`Restore ${skippedRegular.studentName}'s regular lesson`} onClick={() => restoreRegularDate(skippedRegular, date)}>↶</button>}</>
                   : <>{upcomingContinuation.length > 0 && <small className="upcoming-continuation-hint">See above · {upcomingContinuation[0].studentName}</small>}<UpcomingSlotNotes entries={upcoming} onEdit={editUpcomingEntry} /></>}
             </div>
