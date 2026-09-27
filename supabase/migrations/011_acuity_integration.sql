@@ -5,10 +5,9 @@
 -- and that's the pattern every later feature has actually used.
 --
 -- All writes to these four tables happen server-side (Cloudflare Pages
--- Functions, using the Supabase service-role key, which bypasses grants
--- entirely) because every write here is paired with a call to Acuity or
--- Stripe using a secret that must never reach the browser. The client only
--- ever reads them, so it only gets select.
+-- Functions, using the Supabase service-role key) because every write here is
+-- paired with a call to Acuity or Stripe using a secret that must never reach
+-- the browser. The client only ever reads them, so it only gets select.
 
 alter table public.instructors add column if not exists acuity_calendar_id text;
 
@@ -67,3 +66,8 @@ create table if not exists public.fee_charges (
 create index if not exists fee_charges_lead_idx on public.fee_charges(lead_id);
 
 grant select on public.holds, public.acuity_blocks, public.acuity_events, public.fee_charges to authenticated, anon;
+-- Every write to these four tables happens server-side via the service_role key
+-- (Cloudflare Functions). Supabase is retiring automatic Data API grants for new
+-- tables (effective 2026-10-30) -- explicit grants are required per role from
+-- here on, service_role included, rather than assuming that key bypasses grants.
+grant select, insert, update, delete on public.holds, public.acuity_blocks, public.acuity_events, public.fee_charges to service_role;
