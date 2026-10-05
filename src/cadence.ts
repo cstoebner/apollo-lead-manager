@@ -1,4 +1,4 @@
-import type { Availability, Lead } from './types'
+import type { Activity, Availability, Lead } from './types'
 
 const DAY = 86_400_000
 const OFFSETS = [0, 2, 5, 8]
@@ -13,18 +13,37 @@ type OutreachProgress = {
   textLogged: boolean
   lastCompletedAt?: number
   partialAt?: number
+  dueNow?: boolean
+}
+
+// A "cadence_change" activity is a manual checkpoint (see CadenceMoveModal): the latest one for a track
+// overrides the position derived from call/text history, and only activity logged after it counts.
+export type CadenceCheckpoint = { at: number; target: number; dueNow: boolean }
+
+export function latestCadenceCheckpoint(activities: Activity[], kind: 'active' | 'nurture'): CadenceCheckpoint | undefined {
+  let latest: CadenceCheckpoint | undefined
+  for (const activity of activities) {
+    if (activity.type !== 'cadence_change') continue
+    const match = kind === 'active' ? activity.outcome.match(/^Moved to step (\d) of/) : activity.outcome.match(/^Moved to nurture week (\d+)/)
+    if (!match) continue
+    const at = Date.parse(activity.occurredAt)
+    if (latest && at < latest.at) continue
+    latest = { at, target: kind === 'active' ? Number(match[1]) - 1 : Number(match[1]), dueNow: /· due now$/.test(activity.outcome) }
+  }
+  return latest
 }
 
 const activeCallRequired = [true, true, true, true]
 
 export function activeCadenceState(lead: Lead): OutreachProgress {
+  const checkpoint = latestCadenceCheckpoint(lead.activities, 'active')
   const events = lead.activities
-    .filter((activity) => activity.type === 'call' || activity.type === 'text')
+    .filter((activity) => (activity.type === 'call' || activity.type === 'text') && (!checkpoint || Date.parse(activity.occurredAt) > checkpoint.at))
     .sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt))
-  let stage = 0
+  let stage = Math.min(checkpoint?.target ?? 0, OFFSETS.length - 1)
   let callLogged = false
   let textLogged = false
-  let lastCompletedAt: number | undefined
+  let lastCompletedAt: number | undefined = checkpoint && stage > 0 ? checkpoint.at : undefined
 
   for (const activity of events) {
     if (stage >= OFFSETS.length) break
@@ -39,12 +58,26 @@ export function activeCadenceState(lead: Lead): OutreachProgress {
   }
 
   const latestPartial = events.length && (callLogged || textLogged) ? Date.parse(events[events.length - 1].occurredAt) : undefined
-  return { stage, complete: stage >= OFFSETS.length, callLogged, textLogged, lastCompletedAt, partialAt: latestPartial }
+  return { stage, complete: stage >= OFFSETS.length, callLogged, textLogged, lastCompletedAt, partialAt: latestPartial, dueNow: Boolean(checkpoint?.dueNow) && events.length === 0 }
 }
 
 type NurtureAnchor = Pick<Lead, 'receivedAt' | 'activities'>
 
+// The checkpoint only applies if it was made during the current nurture stretch (not before a later move into Nurture).
+export function activeNurtureCheckpoint(lead: NurtureAnchor) {
+  const statusChange = [...lead.activities].reverse().find((activity) =>
+    activity.type === 'status_change' && activity.outcome.includes('to Nurture'),
+  )
+  const checkpoint = latestCadenceCheckpoint(lead.activities, 'nurture')
+  const baseAt = Date.parse(statusChange ? statusChange.occurredAt : lead.receivedAt)
+  return checkpoint && checkpoint.at >= baseAt ? checkpoint : undefined
+}
+
+// Picks a virtual start so the existing elapsed-time week math lands on the chosen week: at the move itself when
+// due now, or at the next contact (14 days later) when waiting the normal gap.
 export function nurtureStartedAt(lead: NurtureAnchor) {
+  const checkpoint = activeNurtureCheckpoint(lead)
+  if (checkpoint) return new Date(checkpoint.at - (checkpoint.dueNow ? checkpoint.target - 1 : Math.max(0, checkpoint.target - 3)) * 7 * DAY)
   const statusChange = [...lead.activities].reverse().find((activity) =>
     activity.type === 'status_change' && activity.outcome.includes('to Nurture'),
   )
@@ -62,7 +95,8 @@ export function nurtureRequiresCall(lead: NurtureAnchor, contactAt: Date) {
 }
 
 export function nurtureCadenceState(lead: Lead): OutreachProgress {
-  const startedAt = nurtureStartedAt(lead).getTime()
+  const checkpoint = activeNurtureCheckpoint(lead)
+  const startedAt = Math.max(nurtureStartedAt(lead).getTime(), checkpoint?.at ?? 0)
   const partialCutoff = Date.now() - 36 * 60 * 60 * 1000
   const groups = new Map<string, { call: boolean; text: boolean; lastAt: number }>()
   lead.activities
@@ -99,6 +133,7 @@ export function nurtureCadenceState(lead: Lead): OutreachProgress {
     textLogged: partial?.text ?? false,
     lastCompletedAt,
     partialAt: partial?.lastAt,
+    dueNow: Boolean(checkpoint?.dueNow) && groups.size === 0,
   }
 }
 
@@ -176,6 +211,9 @@ export function nextContact(lead: Lead, availability: Availability, now = new Da
   if (stage === 0) {
     return { at: now, reason: 'New lead — contact now' }
   }
+  if (progress.dueNow) {
+    return { at: findAvailableTime(new Date(now), availability, true), reason: stage >= 3 ? 'Final cadence follow-up' : `Cadence follow-up ${stage + 1}`, complete: false }
+  }
 
   const offset = OFFSETS[stage] ?? 8
   const previousOffset = OFFSETS[Math.max(0, stage - 1)] ?? 0
@@ -198,8 +236,9 @@ export function nextNurtureContact(lead: Lead, availability: Availability, now =
     at: now,
     reason: 'Finish this nurture step',
   }
-  const anchor = progress.lastCompletedAt ?? nurtureStartedAt(lead).getTime()
-  let target = new Date(anchor + intervalDays * DAY)
+  const checkpoint = activeNurtureCheckpoint(lead)
+  const anchor = progress.lastCompletedAt ?? checkpoint?.at ?? nurtureStartedAt(lead).getTime()
+  let target = progress.dueNow ? new Date(now) : new Date(anchor + intervalDays * DAY)
   if (target < now) target = new Date(now)
   if (target.getDay() === 0) target.setDate(target.getDate() + 1) // Sunday's window is hot-leads only
 
