@@ -101,6 +101,7 @@ const formatTrialTime = (value: string | Date) => new Intl.DateTimeFormat('en-US
   weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
 }).format(new Date(value))
 
+const QUARTER_HOUR_MS = 15 * 60 * 1000
 const trialFormReminderFor = (lead: Lead, templates: Record<string, string> = defaultMessageTemplates): MessageTemplate => ({
   label: 'TRIAL FORM REMINDER',
   message: applyTemplate(templates.trial_form_reminder ?? defaultMessageTemplates.trial_form_reminder, {
@@ -108,7 +109,7 @@ const trialFormReminderFor = (lead: Lead, templates: Record<string, string> = de
     studentPossessive: lead.studentName && lead.studentName !== lead.name ? `${lead.studentName}'s` : 'your',
     instrument: leadInstrumentText(lead),
     trialTime: formatTrialTime(lead.trialAt!),
-    deadline: formatTrialTime(new Date(trialBookedAt(lead).getTime() + 24 * 60 * 60 * 1000)),
+    deadline: formatTrialTime(new Date(Math.ceil((trialBookedAt(lead).getTime() + 24 * 60 * 60 * 1000) / QUARTER_HOUR_MS) * QUARTER_HOUR_MS)),
   }),
 })
 
