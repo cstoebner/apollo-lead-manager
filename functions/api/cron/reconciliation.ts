@@ -28,7 +28,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   const { data: instructors, error: instructorsError } = await db.from('instructors').select('id, name, acuity_calendar_id').not('acuity_calendar_id', 'is', null)
   if (instructorsError) return Response.json({ error: instructorsError.message }, { status: 500 })
 
-  const summary: Record<string, { created: number; removed: number }> = {}
+  const summary: Record<string, { created: number; removed: number; recoveredBookings: number }> = {}
 
   for (const instructor of instructors ?? []) {
     const [{ data: openings }, { data: holds }, { data: existingBlocks }] = await Promise.all([
@@ -77,7 +77,25 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
       removed += 1
     }
 
-    summary[instructor.name] = { created, removed }
+    // Safety net for missed webhooks: any recent Acuity booking we have no event for becomes a synthetic
+    // event, which then shows up as an "Acuity bookings" card like a normal booking would.
+    let recoveredBookings = 0
+    try {
+      const appointments = await acuity.listAppointments({ minDate: new Date(now).toISOString().slice(0, 10), maxDate: new Date(horizonEnd).toISOString().slice(0, 10), calendarID: instructor.acuity_calendar_id! })
+      const recent = appointments.filter((appointment) => appointment.datetimeCreated && Date.parse(appointment.datetimeCreated.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')) > now - 3 * 86_400_000)
+      if (recent.length) {
+        const { data: known } = await db.from('acuity_events').select('acuity_appointment_id').in('acuity_appointment_id', recent.map((appointment) => String(appointment.id)))
+        const knownIds = new Set((known ?? []).map((row) => row.acuity_appointment_id))
+        for (const appointment of recent.filter((item) => !knownIds.has(String(item.id)))) {
+          await db.from('acuity_events').insert({ acuity_appointment_id: String(appointment.id), event_type: 'appointment.reconciled', payload: { form: {}, appointment } })
+          recoveredBookings += 1
+        }
+      }
+    } catch (error) {
+      console.warn(`Appointment sweep failed for ${instructor.name}:`, error instanceof Error ? error.message : error)
+    }
+
+    summary[instructor.name] = { created, removed, recoveredBookings }
   }
 
   return Response.json({ ok: true, summary })
