@@ -4,6 +4,7 @@ import { getAcuityClient } from '../_shared/acuityClient'
 import { buildAcuityBookingLink } from '../../src/acuityLink'
 import { withJsonErrors } from '../_shared/handler'
 import { requireSignedInUser } from '../_shared/auth'
+import { openWindow } from '../_shared/blocks'
 
 const HOLD_HOURS = 24
 
@@ -59,17 +60,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
     .eq('starts_at', start.toISOString())
     .maybeSingle()
 
-  if (!openingMatch) {
-    const { data: overlapping } = await db.from('acuity_blocks')
-      .select('id, acuity_block_id')
-      .eq('instructor_id', instructor.id)
-      .lt('starts_at', end.toISOString())
-      .gt('ends_at', start.toISOString())
-    for (const block of overlapping ?? []) {
-      await acuity.deleteBlock(block.acuity_block_id)
-      await db.from('acuity_blocks').delete().eq('id', block.id)
-    }
-  }
+  if (!openingMatch) await openWindow(db, acuity, { id: instructor.id, acuity_calendar_id: instructor.acuity_calendar_id }, start, end)
 
   const [firstName, ...rest] = lead.name.split(' ')
   const bookingLink = buildAcuityBookingLink({

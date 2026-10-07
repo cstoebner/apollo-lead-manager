@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../_shared/supabaseAdmin'
 import { getAcuityClient } from '../_shared/acuityClient'
 import { withJsonErrors } from '../_shared/handler'
 import { requireSignedInUser } from '../_shared/auth'
+import { openWindow } from '../_shared/blocks'
 
 // Called by the client immediately after it flags/unflags a Trial Opening (the
 // existing grid toggle), to keep the corresponding Acuity block in sync. The
@@ -35,15 +36,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   if (!instructor.acuity_calendar_id) return Response.json({ error: `${instructor.name} has no Acuity calendar mapped yet.` }, { status: 400 })
 
   if (body.isNowBookable) {
-    const { data: overlapping } = await db.from('acuity_blocks')
-      .select('id, acuity_block_id')
-      .eq('instructor_id', instructor.id)
-      .lt('starts_at', end.toISOString())
-      .gt('ends_at', start.toISOString())
-    for (const block of overlapping ?? []) {
-      await acuity.deleteBlock(block.acuity_block_id)
-      await db.from('acuity_blocks').delete().eq('id', block.id)
-    }
+    await openWindow(db, acuity, { id: instructor.id, acuity_calendar_id: instructor.acuity_calendar_id }, start, end)
     return Response.json({ ok: true })
   }
 
