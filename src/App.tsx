@@ -420,6 +420,26 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     }
   }, [])
 
+  const cleanedOpeningIds = useRef(new Set<string>())
+  // Keep Trial Openings honest: drop any whose time has since been taken by a lesson, and re-block them on Acuity.
+  useEffect(() => {
+    if (loadingData || !instructors.length) return
+    const taken = trialOpenings.flatMap((opening) => {
+      if (Date.parse(opening.startsAt) <= Date.now() || cleanedOpeningIds.current.has(opening.id)) return []
+      const entry = entryTakingOpening(opening, instructors, scheduleEntries)
+      return entry ? [{ opening, entry }] : []
+    })
+    if (!taken.length) return
+    const takenIds = new Set(taken.map(({ opening }) => opening.id))
+    takenIds.forEach((id) => cleanedOpeningIds.current.add(id))
+    replaceOpenings(trialOpenings.filter((opening) => !takenIds.has(opening.id)))
+    taken.forEach(({ opening, entry }) => {
+      logScheduleActivity({ action: 'Trial opening removed', instructor: opening.instructor, details: `${formatTrialTime(opening.startsAt)} — that time is now taken by ${entry.studentName}` })
+      const instructor = instructors.find((item) => item.name === opening.instructor)
+      if (instructor?.acuityCalendarId) void syncAcuityBlock(instructor.id, opening.startsAt, false)
+    })
+  }, [trialOpenings, scheduleEntries, instructors, loadingData])
+
   const persist = (work: Promise<unknown>) => {
     if (isSupabaseConfigured) void work.catch((error: Error) => {
       if (isAuthLikeError(error.message)) {
@@ -969,7 +989,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       {didNotConvertPromptId && <ScheduleFollowUpModal lead={leads.find((lead) => lead.id === didNotConvertPromptId)!} title="Follow up with them?" description="They'll show up in Next Actions starting that day so you don't lose track of them." cancelLabel="Skip" defaultNote="Check back in after their trial" defaultOffsetDays={7} onCancel={() => setDidNotConvertPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(didNotConvertPromptId, note, atIso); setDidNotConvertPromptId(null) }} />}
       {deferPromptFor && <DeferModal lead={deferPromptFor.lead} canSkip={deferPromptFor.kind === 'active' || deferPromptFor.kind === 'nurture'} callLogged={deferPromptFor.callLogged} textLogged={deferPromptFor.textLogged} onCancel={() => setDeferPromptFor(null)} onPauseCadence={(note, atIso) => { pauseCadence(deferPromptFor.lead.id, atIso, note); setDeferPromptFor(null) }} onDeferOutside={(note, atIso) => { scheduleFollowUp(deferPromptFor.lead.id, note, atIso); setDeferPromptFor(null) }} onSkip={(part) => { if (part !== 'text') logActivity(deferPromptFor.lead.id, 'call', 'Skipped for this cadence step'); if (part !== 'call') logActivity(deferPromptFor.lead.id, 'text', 'Skipped for this cadence step'); setDeferPromptFor(null) }} />}
       {quickNoteId && <QuickNoteModal lead={leads.find((lead) => lead.id === quickNoteId)!} onClose={() => setQuickNoteId(null)} onSave={(note) => { addNote(quickNoteId, note); setQuickNoteId(null) }} />}
-      {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
+      {textDraft && <TrialTimePicker draft={textDraft} openings={trialOpenings.filter((opening) => !entryTakingOpening(opening, instructors, scheduleEntries))} onClose={() => setTextDraft(null)} onManage={() => { setTextDraft(null); setView('openings') }} onSend={(message) => { setTextDraft(null); void openMessages(textDraft.lead.phone, message) }} />}
       {pendingUndos.length > 0 && <div className="undo-toast" role="status"><span>{pendingUndos[pendingUndos.length - 1].label}. Undo within 10 seconds.</span><button onClick={() => undoPending(pendingUndos[pendingUndos.length - 1].key)}>Undo</button></div>}
     </div>
   )
@@ -2250,6 +2270,17 @@ function timesOverlap(firstTime: string, firstDuration: number, secondTime: stri
   const firstStart = timeMinutes(firstTime)
   const secondStart = timeMinutes(secondTime)
   return firstStart < secondStart + secondDuration && secondStart < firstStart + firstDuration
+}
+
+// A flagged Trial Opening is only real while nothing else occupies that time. A lesson (regular, one-time,
+// trial), break, or vacation that lands on the same time -- on ANY date, including later weeks of a recurring
+// lesson -- takes the opening away.
+function entryTakingOpening(opening: TrialOpening, instructors: Instructor[], entries: ScheduleEntry[]): ScheduleEntry | undefined {
+  const instructor = instructors.find((item) => item.name === opening.instructor)
+  if (!instructor) return undefined
+  const date = new Date(opening.startsAt)
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  return entries.find((entry) => entry.instructorId === instructor.id && entryOccursOnDate(entry, date) && timesOverlap(entryStartTime(entry), entry.durationMinutes ?? 30, time, 30))
 }
 
 const AUTO_BREAK_THRESHOLD_MINUTES = 210
