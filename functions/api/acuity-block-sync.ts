@@ -2,6 +2,7 @@ import type { Env } from '../_shared/env'
 import { supabaseAdmin } from '../_shared/supabaseAdmin'
 import { getAcuityClient } from '../_shared/acuityClient'
 import { withJsonErrors } from '../_shared/handler'
+import { requireSignedInUser } from '../_shared/auth'
 
 // Called by the client immediately after it flags/unflags a Trial Opening (the
 // existing grid toggle), to keep the corresponding Acuity block in sync. The
@@ -20,6 +21,8 @@ interface RequestBody {
 }
 
 export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) => {
+  const authError = await requireSignedInUser(context.request, context.env)
+  if (authError) return authError
   const body = (await context.request.json()) as RequestBody
   const durationMinutes = body.durationMinutes ?? 30
   const start = new Date(body.startsAt)

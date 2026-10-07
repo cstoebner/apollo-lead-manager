@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../_shared/supabaseAdmin'
 import { getAcuityClient } from '../_shared/acuityClient'
 import { buildAcuityBookingLink } from '../../src/acuityLink'
 import { withJsonErrors } from '../_shared/handler'
+import { requireSignedInUser } from '../_shared/auth'
 
 const HOLD_HOURS = 24
 
@@ -21,6 +22,8 @@ interface RequestBody {
 // block is NOT automatically restored on expiry (nightly reconciliation does
 // that as part of its normal every-night sweep instead).
 export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) => {
+  const authError = await requireSignedInUser(context.request, context.env)
+  if (authError) return authError
   const body = (await context.request.json()) as RequestBody
   const durationMinutes = body.durationMinutes ?? 30
   const start = new Date(body.startsAt)

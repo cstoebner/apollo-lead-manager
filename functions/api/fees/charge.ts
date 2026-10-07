@@ -2,6 +2,7 @@ import type { Env } from '../../_shared/env'
 import { supabaseAdmin } from '../../_shared/supabaseAdmin'
 import { getStripeClient } from '../../_shared/stripeClient'
 import { withJsonErrors } from '../../_shared/handler'
+import { requireSignedInUser } from '../../_shared/auth'
 
 const FEE_AMOUNT_CENTS = 4000
 
@@ -16,6 +17,8 @@ interface RequestBody {
 // click just returns the first attempt's result instead of charging again,
 // on top of Stripe's own Idempotency-Key protection for the API call itself.
 export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) => {
+  const authError = await requireSignedInUser(context.request, context.env)
+  if (authError) return authError
   const body = (await context.request.json()) as RequestBody
   const idempotencyKey = `fee-${body.acuityAppointmentId ?? body.leadId}-${body.reason}`
   const db = supabaseAdmin(context.env)
