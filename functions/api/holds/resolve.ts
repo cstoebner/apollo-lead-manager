@@ -8,6 +8,7 @@ interface RequestBody {
   holdId?: string
   eventId?: string
   acuityAppointmentId?: string
+  handledAs?: string
 }
 
 // Every change to a hold's status (and marking a booking/cancellation card as handled) goes through
@@ -30,7 +31,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   }
 
   if (body.eventId) {
-    const { error } = await db.from('acuity_events').update({ handled_at: new Date().toISOString(), handled_as: body.action }).eq('id', body.eventId)
+    const { error } = await db.from('acuity_events').update({ handled_at: new Date().toISOString(), handled_as: body.handledAs ?? body.action }).eq('id', body.eventId)
     if (error) return Response.json({ error: error.message }, { status: 500 })
   }
 

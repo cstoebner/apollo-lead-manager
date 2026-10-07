@@ -12,7 +12,7 @@ import { ESST_ACCRUAL_DIVISOR, ESST_BALANCE_CAP, esstSummaryFor } from './esst'
 import { applyTemplate, defaultMessageTemplates, messageTemplateGroups } from './messageTemplates'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured, supabase } from './supabase'
-import type { AcuityEvent, Activity, ActivityType, EsstHoursEntry, EsstUsageEntry, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
+import type { AcuityAppointmentSnapshot, AcuityEvent, Activity, ActivityType, EsstHoursEntry, EsstUsageEntry, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
 type View = 'today' | 'leads' | 'openings' | 'activity' | 'esst' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean; callFirst?: boolean }
@@ -128,6 +128,45 @@ const holdReminderFor = (lead: Lead, hold: HoldTiming, templates: Record<string,
     ...leadMessageVars(lead), trialTime: formatTrialTime(hold.startsAt), deadline: roundedDeadline(Date.parse(hold.expiresAt)),
   }),
 })
+
+// Acuity sends offsets like -0500 (no colon), which not every browser parses; normalize first.
+const parseAcuityDate = (value: string) => new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+const acuityAction = (event: AcuityEvent) => event.eventType.replace(/^appointment\./, '')
+type BookingCard =
+  | { kind: 'matched'; event: AcuityEvent; hold: Hold; lead: Lead }
+  | { kind: 'unmatched'; event: AcuityEvent }
+  | { kind: 'moved'; event: AcuityEvent; lead: Lead }
+  | { kind: 'canceled'; event: AcuityEvent; lead?: Lead }
+function leadForAppointment(event: AcuityEvent, holds: Hold[], events: AcuityEvent[], leads: Lead[]): Lead | undefined {
+  const id = event.acuityAppointmentId
+  if (!id) return undefined
+  const hold = holds.find((item) => item.acuityAppointmentId === id && item.status === 'confirmed')
+  if (hold) return leads.find((lead) => lead.id === hold.leadId)
+  const linked = events.find((item) => item.acuityAppointmentId === id && item.handledAs?.startsWith('linked:'))
+  return linked ? leads.find((lead) => lead.id === linked.handledAs!.slice('linked:'.length)) : undefined
+}
+function bookingCardsFor(events: AcuityEvent[], holds: Hold[], leads: Lead[], instructors: Instructor[]): BookingCard[] {
+  return events.filter((event) => !event.handledAt).flatMap((event): BookingCard[] => {
+    const action = acuityAction(event)
+    const appointment = event.appointment
+    if (action === 'scheduled' || action === 'reconciled') {
+      if (leadForAppointment(event, holds, events, leads)) return []
+      const instructor = appointment ? instructors.find((item) => item.acuityCalendarId === String(appointment.calendarID)) : undefined
+      const at = appointment?.datetime ? parseAcuityDate(appointment.datetime).getTime() : NaN
+      const hold = instructor ? holds.filter((item) => item.instructorId === instructor.id && Date.parse(item.startsAt) === at && (item.status === 'active' || item.status === 'expired')).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] : undefined
+      const lead = hold ? leads.find((item) => item.id === hold.leadId) : undefined
+      return hold && lead ? [{ kind: 'matched', event, hold, lead }] : [{ kind: 'unmatched', event }]
+    }
+    if (action === 'rescheduled' || action === 'changed') {
+      const lead = leadForAppointment(event, holds, events, leads)
+      if (!lead) return []
+      const at = appointment?.datetime ? parseAcuityDate(appointment.datetime).getTime() : NaN
+      return !Number.isNaN(at) && lead.trialAt && Date.parse(lead.trialAt) !== at ? [{ kind: 'moved', event, lead }] : []
+    }
+    if (action === 'canceled') return [{ kind: 'canceled', event, lead: leadForAppointment(event, holds, events, leads) }]
+    return []
+  })
+}
 
 const toDateTimeInput = (date: Date) => {
   const offset = date.getTimezoneOffset()
@@ -519,6 +558,74 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setDataError(`Couldn't release the hold: ${(error as Error).message}`)
     }
   }
+  const resolveEventOnServer = async (payload: Record<string, unknown>, eventId: string, patch: { holdId?: string; holdStatus?: Hold['status']; handledAs: string }) => {
+    try {
+      await callApi('/api/holds/resolve', payload)
+      setAcuityEvents((current) => current.map((item) => item.id === eventId ? { ...item, handledAt: new Date().toISOString(), handledAs: patch.handledAs } : item))
+      if (patch.holdId && patch.holdStatus) setHolds((current) => current.map((item) => item.id === patch.holdId ? { ...item, status: patch.holdStatus! } : item))
+      refreshAcuityData()
+      return true
+    } catch (error) {
+      setDataError(`The change was made here, but couldn't be saved to the booking record (${(error as Error).message}). The card will stay until you retry.`)
+      return false
+    }
+  }
+  const bookFromAcuity = async (event: AcuityEvent, lead: Lead, instructorId: string, hold?: Hold) => {
+    const appointment = event.appointment
+    if (!appointment?.datetime) { window.alert('This booking has no time details yet — try again in a minute.'); return }
+    const startsAtIso = parseAcuityDate(appointment.datetime).toISOString()
+    // Log the real event time (when the family actually booked), not the moment Conor clicked Confirm.
+    const bookedAtIso = appointment.datetimeCreated ? parseAcuityDate(appointment.datetimeCreated).toISOString() : event.receivedAt
+    const alreadyBooked = Boolean(lead.trialAt) && Date.parse(lead.trialAt!) === Date.parse(startsAtIso)
+    const newActivities: Activity[] = []
+    let leadUpdate: Partial<Lead> = { holdFormComplete: true }
+    if (!alreadyBooked) {
+      if (!bookTrialOnSchedule(lead, instructorId, startsAtIso, ((hold?.durationMinutes ?? 30) as 30 | 45 | 60))) return
+      leadUpdate = { trialAt: startsAtIso, holdFormComplete: true, trialAttended: false }
+      newActivities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: bookedAtIso, outcome: `Trial lesson booked for ${formatTrialTime(startsAtIso)} (via Acuity)` })
+    }
+    newActivities.push({ id: crypto.randomUUID(), type: 'trial_update', occurredAt: bookedAtIso, outcome: 'Booking form completed (Acuity booking received)' })
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, ...newActivities].sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt)) } : item))
+    persist(Promise.all([...newActivities.map((activity) => saveActivity(lead.id, activity)), updateLead(lead.id, leadUpdate)]))
+    const appointmentId = String(appointment.id ?? event.acuityAppointmentId ?? '')
+    await resolveEventOnServer(
+      hold ? { action: 'confirm', holdId: hold.id, eventId: event.id, acuityAppointmentId: appointmentId } : { action: 'dismiss_event', eventId: event.id, handledAs: `linked:${lead.id}` },
+      event.id, { holdId: hold?.id, holdStatus: hold ? 'confirmed' : undefined, handledAs: hold ? 'confirm' : `linked:${lead.id}` },
+    )
+  }
+  const confirmBooking = (event: AcuityEvent, hold: Hold) => {
+    const lead = leads.find((item) => item.id === hold.leadId)
+    if (lead) void bookFromAcuity(event, lead, hold.instructorId, hold)
+  }
+  const linkBooking = (event: AcuityEvent, lead: Lead) => {
+    const instructor = instructors.find((item) => item.acuityCalendarId === String(event.appointment?.calendarID))
+    if (!instructor) { window.alert('No instructor is linked to that Acuity calendar yet.'); return }
+    void bookFromAcuity(event, lead, instructor.id)
+  }
+  const declineBooking = async (event: AcuityEvent, hold: Hold) => {
+    const a = event.appointment
+    addLeadActivity(hold.leadId, 'trial_update', `Held time ${formatTrialTime(hold.startsAt)} was booked by someone else (${[a?.firstName, a?.lastName].filter(Boolean).join(' ') || 'unknown'}) — not linked to this lead`)
+    await resolveEventOnServer({ action: 'unmatched', holdId: hold.id, eventId: event.id }, event.id, { holdId: hold.id, holdStatus: 'unmatched', handledAs: 'unmatched' })
+  }
+  const dismissAcuityEvent = (event: AcuityEvent, handledAs = 'dismissed') => { void resolveEventOnServer({ action: 'dismiss_event', eventId: event.id, handledAs }, event.id, { handledAs }) }
+  const applyBookingChange = (event: AcuityEvent, lead: Lead) => {
+    const appointment = event.appointment
+    const instructor = instructors.find((item) => item.acuityCalendarId === String(appointment?.calendarID))
+    if (!appointment?.datetime || !instructor) { window.alert('Could not match this change to an instructor.'); return }
+    const startsAtIso = parseAcuityDate(appointment.datetime).toISOString()
+    if (!bookTrialOnSchedule(lead, instructor.id, startsAtIso)) return
+    const leadUpdate: Partial<Lead> = { trialAt: startsAtIso }
+    const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome: `Trial rescheduled to ${formatTrialTime(startsAtIso)} (via Acuity)` }
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...leadUpdate, activities: [...item.activities, activity] } : item))
+    persist(Promise.all([saveActivity(lead.id, activity), updateLead(lead.id, leadUpdate)]))
+    dismissAcuityEvent(event, 'applied')
+  }
+  const cancelBooking = (event: AcuityEvent, lead?: Lead) => {
+    if (lead) {
+      clearTrial(lead, { confirmMessage: `Clear ${lead.name}'s trial in the tracker? Their Acuity appointment was canceled.`, outcome: 'Trial cancelled via Acuity' })
+    }
+    dismissAcuityEvent(event, 'canceled_applied')
+  }
   const moveCadence = (id: string, outcome: string) => {
     const lead = leads.find((item) => item.id === id)
     const activity: Activity = { id: crypto.randomUUID(), type: 'cadence_change', occurredAt: new Date().toISOString(), outcome }
@@ -847,7 +954,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -855,7 +962,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
       </main>
 
-      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} onResumeCadenceNow={resumeCadenceNow} onLogReply={logReply} onMoveCadence={moveCadence} instructors={instructors} holds={holds} onCreateHold={createHold} onSendHoldText={sendHoldText} onReleaseHold={releaseHold} />}
+      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} onResumeCadenceNow={resumeCadenceNow} onLogReply={logReply} onMoveCadence={moveCadence} instructors={instructors} holds={holds} onCreateHold={createHold} onSendHoldText={sendHoldText} onReleaseHold={releaseHold} trialEntry={scheduleEntries.find((entry) => entry.leadId === selected.id && entry.kind === 'trial' && entry.startsAt && Date.parse(entry.startsAt) > Date.now())} />}
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {siblingModalFor && <AddSiblingModal parent={siblingModalFor} instruments={offeredInstruments} onClose={() => setSiblingModalFor(null)} onSave={(input) => addSibling(siblingModalFor, input)} />}
       {unenrollPromptId && <ScheduleFollowUpModal lead={leads.find((lead) => lead.id === unenrollPromptId)!} title="When should we check back in?" description="They'll sit in Action Pending starting that day, until you mark it done." cancelLabel="Skip" defaultNote="Check in about re-enrolling" defaultOffsetDays={60} onCancel={() => setUnenrollPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(unenrollPromptId, note, atIso); setUnenrollPromptId(null) }} />}
@@ -953,9 +1060,9 @@ function ReplyReceivedModal({ lead, kind, onClose, onSave }: { lead: Lead; kind:
   </div>
 }
 
-function HoldSlotModal({ lead, instructors, openings, holds, onClose, onCreate, onSendText }: { lead: Lead; instructors: Instructor[]; openings: TrialOpening[]; holds: Hold[]; onClose: () => void; onCreate: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendText: (message: string, startsAtIso: string) => void }) {
-  const [instructorId, setInstructorId] = useState(instructors[0]?.id ?? '')
-  const [startsAt, setStartsAt] = useState('')
+function HoldSlotModal({ lead, instructors, openings, holds, fixed, onClose, onCreate, onSendText }: { fixed?: { instructorId: string; startsAt: string }; lead: Lead; instructors: Instructor[]; openings: TrialOpening[]; holds: Hold[]; onClose: () => void; onCreate: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendText: (message: string, startsAtIso: string) => void }) {
+  const [instructorId, setInstructorId] = useState(fixed?.instructorId ?? instructors[0]?.id ?? '')
+  const [startsAt, setStartsAt] = useState(fixed?.startsAt ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState<{ message: string; startsAt: string } | null>(null)
@@ -981,12 +1088,14 @@ function HoldSlotModal({ lead, instructors, openings, holds, onClose, onCreate, 
         <div className="message-preview"><strong>Message preview</strong><p>{created.message}</p></div>
         <div className="picker-actions"><button type="button" className="secondary" onClick={onClose}>I’ll text later</button><button type="button" className="primary" onClick={() => onSendText(created.message, created.startsAt)}>Copy &amp; open Messages</button></div>
       </> : <>
-        <h2>Hold a trial slot</h2>
-        <p className="muted">Pick a flagged trial opening to hold for {lead.name.split(' ')[0]}. It stays open for 24 hours, then releases if they haven’t booked.</p>
-        {instructors.length > 1 && <label className="field">Instructor<select value={instructorId} onChange={(event) => { setInstructorId(event.target.value); setStartsAt('') }}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}
-        <div className="time-options">{slots.map((opening) => <button type="button" key={opening.id} className={startsAt === opening.startsAt ? 'time-option selected' : 'time-option'} onClick={() => setStartsAt(opening.startsAt)}><span>{startsAt === opening.startsAt ? '✓' : '○'}</span><div><strong>{formatTrialTime(opening.startsAt)}</strong><small>Instructor: {opening.instructor}</small></div></button>)}
+        <h2>{fixed ? 'Text the Acuity booking link' : 'Hold a trial slot'}</h2>
+        {fixed
+          ? <p className="muted">{lead.name.split(' ')[0]}’s trial is on the schedule for {formatTrialTime(fixed.startsAt)} with {instructor?.name ?? 'the instructor'}. This holds that time open on Acuity for 24 hours so they can complete the booking form from the link.</p>
+          : <p className="muted">Pick a flagged trial opening to hold for {lead.name.split(' ')[0]}. It stays open for 24 hours, then releases if they haven’t booked.</p>}
+        {!fixed && instructors.length > 1 && <label className="field">Instructor<select value={instructorId} onChange={(event) => { setInstructorId(event.target.value); setStartsAt('') }}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}
+        {!fixed && <div className="time-options">{slots.map((opening) => <button type="button" key={opening.id} className={startsAt === opening.startsAt ? 'time-option selected' : 'time-option'} onClick={() => setStartsAt(opening.startsAt)}><span>{startsAt === opening.startsAt ? '✓' : '○'}</span><div><strong>{formatTrialTime(opening.startsAt)}</strong><small>Instructor: {opening.instructor}</small></div></button>)}
           {!slots.length && <div className="picker-warning"><strong>No open trial times for {instructor?.name ?? 'this instructor'}.</strong><span>Flag some on the Instructor schedule tab first, then come back.</span></div>}
-        </div>
+        </div>}
         {error && <p className="picker-warning"><strong>Couldn’t create the hold.</strong><span>{error}</span></p>}
         <div className="picker-actions"><button type="button" className="secondary" onClick={onClose} disabled={busy}>Cancel</button><button type="button" className="primary" disabled={!startsAt || busy} onClick={() => void create()}>{busy ? 'Creating…' : 'Create hold'}</button></div>
       </>}
@@ -1071,9 +1180,16 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, acuityEvents, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
   holds: Hold[]
   onReleaseHold: (hold: Hold) => void
+  acuityEvents: AcuityEvent[]
+  onConfirmBooking: (event: AcuityEvent, hold: Hold) => void
+  onDeclineBooking: (event: AcuityEvent, hold: Hold) => void
+  onLinkBooking: (event: AcuityEvent, lead: Lead) => void
+  onApplyBookingChange: (event: AcuityEvent, lead: Lead) => void
+  onCancelBooking: (event: AcuityEvent, lead?: Lead) => void
+  onDismissEvent: (event: AcuityEvent, handledAs?: string) => void
   leads: Lead[]
   instructors: Instructor[]
   instructorAvailability: InstructorAvailability[]
@@ -1098,6 +1214,8 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 }) {
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
   const [callOutcomeLead, setCallOutcomeLead] = useState<Lead | null>(null)
+  const [linkEvent, setLinkEvent] = useState<AcuityEvent | null>(null)
+  const bookingCards = bookingCardsFor(acuityEvents, holds, leads, instructors)
   const activeHolds = holds.filter((hold) => hold.status === 'active')
   const heldLeadIds = new Set(activeHolds.map((hold) => hold.leadId))
   const active = leads.filter((lead) => lead.status === 'hot' && !lead.trialAt && !lead.followUpAt && !isCadencePaused(lead) && !heldLeadIds.has(lead.id))
@@ -1119,7 +1237,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   })
   const nurture = leads.filter((lead) => lead.status === 'nurture' && !lead.followUpAt && !isCadencePaused(lead))
   const followUps = leads.filter((lead) => lead.followUpAt && lead.status !== 'unresponsive' && lead.status !== 'nurture_long_term')
-  const bookingFormReminders = leads.filter((lead) => lead.trialAt && !lead.holdFormComplete && lead.status !== 'unenrolled')
+  const bookingFormReminders = leads.filter((lead) => lead.trialAt && !lead.holdFormComplete && lead.status !== 'unenrolled' && !heldLeadIds.has(lead.id))
   const planned = useMemo(() => [
     ...active.map((lead) => ({ lead, kind: 'active' as const, hold: undefined as Hold | undefined, recommendation: nextContact(lead, defaultAvailability, effectiveNowFor(lead)), template: activeFollowUpFor(lead, messageTemplates), progress: activeCadenceState(lead) })),
     ...nurture.map((lead) => {
@@ -1199,6 +1317,8 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
         {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
+    <AcuityBookingCards cards={bookingCards} instructors={instructors} onConfirm={onConfirmBooking} onDecline={onDeclineBooking} onLink={(event) => setLinkEvent(event)} onApplyChange={onApplyBookingChange} onCancelBooking={onCancelBooking} onDismiss={onDismissEvent} />
+    {linkEvent && <LinkBookingModal leads={leads} event={linkEvent} onClose={() => setLinkEvent(null)} onLink={(lead) => { onLinkBooking(linkEvent, lead); setLinkEvent(null) }} />}
     <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} onStatusChange={onStatusChange} />
     <section className="card upcoming-outreach-card">
       <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
@@ -1213,6 +1333,49 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 }
 
 const isTrialPromptReason = (reason: PendingActionItem['reason']): reason is TrialPromptReason => reason === 'booking_form' || reason === 'trial_complete' || reason === 'became_student'
+
+function AcuityBookingCards({ cards, instructors, onConfirm, onDecline, onLink, onApplyChange, onCancelBooking, onDismiss }: { cards: BookingCard[]; instructors: Instructor[]; onConfirm: (event: AcuityEvent, hold: Hold) => void; onDecline: (event: AcuityEvent, hold: Hold) => void; onLink: (event: AcuityEvent) => void; onApplyChange: (event: AcuityEvent, lead: Lead) => void; onCancelBooking: (event: AcuityEvent, lead?: Lead) => void; onDismiss: (event: AcuityEvent) => void }) {
+  if (!cards.length) return null
+  const bookedBy = (a?: AcuityAppointmentSnapshot) => a ? ([`${a.firstName ?? ''} ${a.lastName ?? ''}`.trim(), a.email, a.phone].filter(Boolean).join(' · ') || 'Details unavailable') : 'Details unavailable'
+  const when = (a?: AcuityAppointmentSnapshot) => a?.datetime ? formatTrialTime(parseAcuityDate(a.datetime)) : 'unknown time'
+  const teacher = (a?: AcuityAppointmentSnapshot) => instructors.find((item) => item.acuityCalendarId === String(a?.calendarID))?.name ?? 'unknown instructor'
+  return <section className="card pending-card">
+    <div className="section-head"><div><h2>Acuity bookings</h2><p>Bookings and changes that came in through Acuity and need your OK.</p></div></div>
+    <div className="pending-list">{cards.map((card) => {
+      const a = card.event.appointment
+      const bookedAt = a?.datetimeCreated ? formatDate(parseAcuityDate(a.datetimeCreated)) : formatDate(card.event.receivedAt)
+      return <article key={card.event.id} className="pending-row">
+        <div className="pending-person static"><span>
+          {card.kind === 'matched' && <><strong>Booking received — held for {card.lead.name}</strong><small>Held: {formatTrialTime(card.hold.startsAt)} · {teacher(a)}</small><small>Booked by: {bookedBy(a)} · at {bookedAt}</small></>}
+          {card.kind === 'unmatched' && <><strong>New booking, no hold at this time</strong><small>{when(a)} · {teacher(a)}</small><small>Booked by: {bookedBy(a)} · at {bookedAt}</small></>}
+          {card.kind === 'moved' && <><strong>Booking moved — {card.lead.name}</strong><small>Now {when(a)} · {teacher(a)} (tracker still shows {card.lead.trialAt ? formatTrialTime(card.lead.trialAt) : 'no trial'})</small></>}
+          {card.kind === 'canceled' && <><strong>Booking canceled{card.lead ? ` — ${card.lead.name}` : ''}</strong><small>{when(a)} · {teacher(a)}{!card.lead ? ' · not linked to a lead in the tracker' : ''}</small></>}
+        </span></div>
+        <div className="row-actions">
+          {card.kind === 'matched' && <><button className="prompt-yes" onClick={() => onConfirm(card.event, card.hold)}>✓ Confirm</button><button className="prompt-no" onClick={() => onDecline(card.event, card.hold)}>✕ Don’t confirm</button></>}
+          {card.kind === 'unmatched' && <><button className="prompt-yes" onClick={() => onLink(card.event)}>Link to a lead…</button><button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
+          {card.kind === 'moved' && <><button className="prompt-yes" onClick={() => onApplyChange(card.event, card.lead)}>✓ Update the trial</button><button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
+          {card.kind === 'canceled' && <>{card.lead && <button className="prompt-no" onClick={() => onCancelBooking(card.event, card.lead)}>Clear trial in tracker</button>}<button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
+        </div>
+      </article>
+    })}</div>
+  </section>
+}
+
+function LinkBookingModal({ leads, event, onClose, onLink }: { leads: Lead[]; event: AcuityEvent; onClose: () => void; onLink: (lead: Lead) => void }) {
+  const [leadId, setLeadId] = useState('')
+  const a = event.appointment
+  return <div className="overlay modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <section className="modal">
+      <button type="button" className="close" onClick={onClose}>×</button>
+      <p className="eyebrow">Acuity booking</p>
+      <h2>Link to a lead</h2>
+      <p className="muted">{[a?.firstName, a?.lastName].filter(Boolean).join(' ') || 'Someone'} booked {a?.datetime ? formatTrialTime(parseAcuityDate(a.datetime)) : 'a time'}. Pick who this is, and the trial goes on the schedule.</p>
+      <LeadSearchPicker leads={leads} selectedLeadId={leadId} initialName={[a?.firstName, a?.lastName].filter(Boolean).join(' ')} onSelect={(lead) => setLeadId(lead.id)} onClear={() => setLeadId('')} />
+      <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={!leadId} onClick={() => { const lead = leads.find((item) => item.id === leadId); if (lead) onLink(lead) }}>Link &amp; book trial</button></div>
+    </section>
+  </div>
+}
 
 function PendingActions({ leads, onSelect, onLog, onLogCall, onTextNow, onTakeNote, onPromptYes, onPromptNo, onPromptSecondTrial, onCollectSignature, onOverrideSignature, onStatusChange }: {
   leads: PendingActionItem[]
@@ -2654,11 +2817,13 @@ function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft
   </section></div>
 }
 
-function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, siblings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp, onAddSibling, onSelectSibling, onResumeCadenceNow, onLogReply, onMoveCadence, instructors, holds, onCreateHold, onSendHoldText, onReleaseHold }: { instructors: Instructor[]; holds: Hold[]; onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendHoldText: (lead: Lead, message: string, startsAtIso: string, again?: boolean) => void; onReleaseHold: (hold: Hold) => void; lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; siblings: Lead[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void; onAddSibling: () => void; onSelectSibling: (id: string) => void; onResumeCadenceNow: (lead: Lead) => void; onLogReply: (id: string, type: ReplyKind, occurredAt: string, tags: string[], note: string) => void; onMoveCadence: (id: string, outcome: string) => void }) {
+function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, siblings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp, onAddSibling, onSelectSibling, onResumeCadenceNow, onLogReply, onMoveCadence, instructors, holds, onCreateHold, onSendHoldText, onReleaseHold, trialEntry }: { trialEntry?: ScheduleEntry; instructors: Instructor[]; holds: Hold[]; onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendHoldText: (lead: Lead, message: string, startsAtIso: string, again?: boolean) => void; onReleaseHold: (hold: Hold) => void; lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; siblings: Lead[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void; onAddSibling: () => void; onSelectSibling: (id: string) => void; onResumeCadenceNow: (lead: Lead) => void; onLogReply: (id: string, type: ReplyKind, occurredAt: string, tags: string[], note: string) => void; onMoveCadence: (id: string, outcome: string) => void }) {
   const [editing, setEditing] = useState(false)
   const [moveOpen, setMoveOpen] = useState(false)
   const [holdOpen, setHoldOpen] = useState(false)
   const activeHold = holds.find((hold) => hold.leadId === lead.id && hold.status === 'active')
+  const trialInstructor = trialEntry ? instructors.find((item) => item.id === trialEntry.instructorId) : undefined
+  const canLinkExistingTrial = Boolean(lead.trialAt && !lead.holdFormComplete && trialEntry?.startsAt && trialInstructor?.acuityCalendarId && !activeHold)
   const holdInstructors = instructors.filter((item) => item.acuityCalendarId && shareInstrument(item.instruments, lead.instruments))
   const [replyKind, setReplyKind] = useState<ReplyKind | null>(null)
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
@@ -2680,8 +2845,9 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, sibling
     {activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}
     <div className="drawer-actions"><button className="primary" onClick={() => onTextNow(lead, messageTemplate)}>↗ Text now</button>{(!messageTemplate || messageTemplate.callFirst) && <button className="secondary" disabled={cadenceProgress?.callLogged} onClick={() => onLog(lead.id, 'call')}>{cadenceProgress?.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button className="secondary" disabled={cadenceProgress?.textLogged} onClick={() => onLog(lead.id, 'text')}>{cadenceProgress?.textLogged ? '✓ Text logged' : '✓ Log text'}</button><button className="secondary" onClick={() => setReplyKind('text_received')}>↙ Text received</button><button className="secondary" onClick={() => setReplyKind('call_received')}>↙ Call received</button></div>
     <TrialWorkflowEditor key={`${lead.id}-${lead.trialAt ?? 'none'}`} lead={lead} onTrialUpdate={onTrialUpdate} onClearTrial={onClearTrial} />
-    {!lead.trialAt && (activeHold
+    {(activeHold || !lead.trialAt || canLinkExistingTrial) && (activeHold
       ? <section className="trial-workflow"><div className="trial-workflow-head"><div><strong>Acuity hold</strong><small>Holding {formatTrialTime(activeHold.startsAt)} with {instructors.find((item) => item.id === activeHold.instructorId)?.name ?? 'instructor'} until {roundedDeadline(Date.parse(activeHold.expiresAt))}</small></div></div><div className="drawer-actions"><button type="button" className="secondary" onClick={() => onSendHoldText(lead, holdLinkMessage(lead, activeHold, messageTemplates), activeHold.startsAt, true)}>↗ Text booking link again</button><button type="button" className="secondary" onClick={() => onReleaseHold(activeHold)}>Release hold</button></div></section>
+      : canLinkExistingTrial ? <button type="button" className="secondary" onClick={() => setHoldOpen(true)}>↗ Text Acuity booking link</button>
       : holdInstructors.length > 0 && <button type="button" className="secondary" onClick={() => setHoldOpen(true)}>＋ Hold a slot &amp; text booking link</button>)}
     <LeadNoteComposer onSave={(note) => onAddNote(lead.id, note)} />
     <FollowUpComposer lead={lead} onSchedule={(note, atIso) => onScheduleFollowUp(lead.id, note, atIso)} onResolve={() => onResolveFollowUp(lead)} />
@@ -2690,7 +2856,7 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, sibling
     <div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div>
     <h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'cadence_change' ? 'Cadence moved' : isReplyActivity(activity.type) ? replyLabel(activity.type) : activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'note' ? 'Note' : activity.type === 'status_change' ? 'Status updated' : activity.type === 'trial_update' ? 'Trial updated' : activity.type === 'lead_created' ? 'New lead received' : activity.type === 'lead_update' ? 'Lead information updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)}{activity.type === 'note' ? '' : ` · ${activity.outcome}`}{isReplyActivity(activity.type) && replyDelayNote(activity.type, minutesSinceLastText(lead.activities, activity.occurredAt, activity.id)) ? ` · ${replyDelayNote(activity.type, minutesSinceLastText(lead.activities, activity.occurredAt, activity.id))}` : ''}</small>{activity.type === 'note' && <small className="timeline-note-preview" title={activity.outcome}>{activity.outcome}</small>}</span>{(activity.type === 'call' || activity.type === 'text' || activity.type === 'note' || activity.type === 'cadence_change' || isReplyActivity(activity.type)) && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDeleteActivity(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div>
     <button className="delete-lead-button" onClick={() => onDeleteLead(lead.id)}>Delete lead permanently</button>
-  </aside></div>{holdOpen && <HoldSlotModal lead={lead} instructors={holdInstructors} openings={trialOpenings} holds={holds} onClose={() => setHoldOpen(false)} onCreate={onCreateHold} onSendText={(message, startsAtIso) => { onSendHoldText(lead, message, startsAtIso); setHoldOpen(false) }} />}{moveOpen && <CadenceMoveModal lead={lead} track={lead.status === 'nurture' ? 'nurture' : 'active'} onClose={() => setMoveOpen(false)} onSave={(outcome) => { onMoveCadence(lead.id, outcome); setMoveOpen(false) }} />}{replyKind && <ReplyReceivedModal lead={lead} kind={replyKind} onClose={() => setReplyKind(null)} onSave={(occurredAt, tags, note) => { onLogReply(lead.id, replyKind, occurredAt, tags, note); setReplyKind(null) }} />}{editing && <EditLeadModal lead={lead} instruments={instruments} onClose={() => setEditing(false)} onSave={(update) => { onUpdateLead(lead.id, update); setEditing(false) }} />}</>
+  </aside></div>{holdOpen && <HoldSlotModal lead={lead} fixed={canLinkExistingTrial && trialEntry?.startsAt ? { instructorId: trialEntry.instructorId, startsAt: trialEntry.startsAt } : undefined} instructors={canLinkExistingTrial && trialInstructor ? [trialInstructor] : holdInstructors} openings={trialOpenings} holds={holds} onClose={() => setHoldOpen(false)} onCreate={onCreateHold} onSendText={(message, startsAtIso) => { onSendHoldText(lead, message, startsAtIso); setHoldOpen(false) }} />}{moveOpen && <CadenceMoveModal lead={lead} track={lead.status === 'nurture' ? 'nurture' : 'active'} onClose={() => setMoveOpen(false)} onSave={(outcome) => { onMoveCadence(lead.id, outcome); setMoveOpen(false) }} />}{replyKind && <ReplyReceivedModal lead={lead} kind={replyKind} onClose={() => setReplyKind(null)} onSave={(occurredAt, tags, note) => { onLogReply(lead.id, replyKind, occurredAt, tags, note); setReplyKind(null) }} />}{editing && <EditLeadModal lead={lead} instruments={instruments} onClose={() => setEditing(false)} onSave={(update) => { onUpdateLead(lead.id, update); setEditing(false) }} />}</>
 }
 
 function TrialWorkflowEditor({ lead, onTrialUpdate, onClearTrial }: { lead: Lead; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void }) {
