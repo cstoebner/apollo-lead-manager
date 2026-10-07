@@ -53,6 +53,7 @@ export interface Instructor {
   name: string
   instruments: string[]
   esstEligible?: boolean
+  acuityCalendarId?: string
 }
 
 export interface EsstHoursEntry {
@@ -103,4 +104,52 @@ export interface ScheduleActivity {
   instructor: string
   details: string
   studentName?: string
+}
+
+export type HoldStatus = 'active' | 'expired' | 'confirmed' | 'unmatched'
+
+export interface Hold {
+  id: string
+  leadId: string
+  instructorId: string
+  startsAt: string
+  durationMinutes: number
+  bookingLink: string
+  createdAt: string
+  expiresAt: string
+  status: HoldStatus
+  acuityAppointmentId?: string
+}
+
+export interface AcuityAppointmentSnapshot {
+  id?: string | number
+  datetime?: string
+  datetimeCreated?: string
+  calendarID?: string | number
+  firstName?: string
+  lastName?: string
+  email?: string
+  phone?: string
+}
+
+export interface AcuityEvent {
+  id: string
+  acuityAppointmentId?: string
+  eventType: string
+  appointment?: AcuityAppointmentSnapshot
+  receivedAt: string
+  handledAt?: string
+  handledAs?: string
+}
+
+export interface FeeCharge {
+  id: string
+  leadId: string
+  acuityAppointmentId?: string
+  amountCents: number
+  reason: 'no_show' | 'late_cancel'
+  status: 'succeeded' | 'failed' | 'waived'
+  failureMessage?: string
+  waivedReason?: string
+  createdAt: string
 }

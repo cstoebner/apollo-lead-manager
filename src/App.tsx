@@ -2,16 +2,17 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import apolloIcon from './assets/apollo-icon.png'
 import apolloLogoFull from './assets/apollo-logo-full.png'
+import { ApiError, callApi } from './api'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, latestCadenceCheckpoint, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt, nurtureWeekFor } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
-import { loadWorkspaceData, removeActivity as removeStoredActivity, removeEsstHoursEntry as removeStoredEsstHoursEntry, removeEsstUsageEntry as removeStoredEsstUsageEntry, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveEsstHoursEntry, saveEsstUsageEntry, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
+import { loadAcuityData, loadWorkspaceData, removeActivity as removeStoredActivity, removeEsstHoursEntry as removeStoredEsstHoursEntry, removeEsstUsageEntry as removeStoredEsstUsageEntry, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveEsstHoursEntry, saveEsstUsageEntry, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import type { WorkspaceData } from './database'
 import { ESST_ACCRUAL_DIVISOR, ESST_BALANCE_CAP, esstSummaryFor } from './esst'
 import { applyTemplate, defaultMessageTemplates, messageTemplateGroups } from './messageTemplates'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured, supabase } from './supabase'
-import type { Activity, ActivityType, EsstHoursEntry, EsstUsageEntry, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
+import type { AcuityEvent, Activity, ActivityType, EsstHoursEntry, EsstUsageEntry, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
 type View = 'today' | 'leads' | 'openings' | 'activity' | 'esst' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean; callFirst?: boolean }
@@ -271,6 +272,9 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [scheduleActivities, setScheduleActivities] = useState<ScheduleActivity[]>([])
   const [esstHoursEntries, setEsstHoursEntries] = useState<EsstHoursEntry[]>([])
   const [esstUsageEntries, setEsstUsageEntries] = useState<EsstUsageEntry[]>([])
+  const [holds, setHolds] = useState<Hold[]>([])
+  const [acuityEvents, setAcuityEvents] = useState<AcuityEvent[]>([])
+  const [feeCharges, setFeeCharges] = useState<FeeCharge[]>([])
   const [loadingData, setLoadingData] = useState(isSupabaseConfigured)
   const [dataError, setDataError] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -306,6 +310,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
       setMessageTemplateOverrides(data.messageTemplates ?? {})
       setLoadingData(false)
+      refreshAcuityData()
     }
     void loadWorkspaceData().then(applyWorkspaceData).catch(async (error: Error) => {
       if (!isAuthLikeError(error.message)) { setDataError(error.message); setLoadingData(false); return }
@@ -319,6 +324,36 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       }
     })
   }, [])
+
+  const refreshAcuityData = () => {
+    if (!isSupabaseConfigured) return
+    void loadAcuityData().then((data) => { setHolds(data.holds); setAcuityEvents(data.events); setFeeCharges(data.feeCharges) }).catch((error: Error) => console.warn('Acuity data refresh failed:', error.message))
+  }
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    const refreshIfVisible = () => { if (document.visibilityState === 'visible') refreshAcuityData() }
+    const timer = window.setInterval(refreshIfVisible, 60_000)
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    window.addEventListener('focus', refreshIfVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+      window.removeEventListener('focus', refreshIfVisible)
+    }
+  }, [])
+
+  // Keeps Acuity's public booking page in step with the Trial Opening toggle (only for instructors linked to an Acuity calendar).
+  const syncAcuityBlock = async (instructorId: string, startsAtIso: string, isNowBookable: boolean): Promise<{ ok: true } | { ok: false; conflict: boolean; message: string }> => {
+    try {
+      await callApi('/api/acuity-block-sync', { instructorId, startsAt: startsAtIso, durationMinutes: 30, isNowBookable })
+      return { ok: true }
+    } catch (error) {
+      const message = (error as Error).message
+      const conflict = error instanceof ApiError && error.status === 409
+      if (!conflict) setDataError(`Saved here, but Acuity wasn't updated (${message}). Nightly reconciliation will fix it.`)
+      return { ok: false, conflict, message }
+    }
+  }
 
   useEffect(() => {
     if (!isSupabaseConfigured) return
@@ -766,7 +801,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
 
         {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
-        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} />}
+        {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
         {view === 'esst' && <Esst instructors={instructors} hoursEntries={esstHoursEntries} usageEntries={esstUsageEntries} onAddHours={addEsstHours} onDeleteHours={deleteEsstHours} onAddUsage={addEsstUsage} onDeleteUsage={deleteEsstUsage} />}
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
@@ -1793,7 +1828,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
 
   return <><section className="settings-grid">
     <div className="card setting-card settings-wide"><h2>Instruments offered</h2><p>This list controls the instrument choices used throughout the lead manager.</p><form className="settings-add-row" onSubmit={(event) => { event.preventDefault(); addInstrument() }}><input value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)} placeholder="Add an instrument" /><button className="primary" type="submit" disabled={!newInstrument.trim()}>＋ Add</button></form><div className="settings-item-list">{instruments.map((instrument) => { const used = instrumentIsUsed(instrument); return <span key={instrument}><b>{instrument}</b>{used && <small>In use</small>}<button disabled={used} title={used ? `${instrument} is currently in use` : `Remove ${instrument}`} onClick={() => removeInstrument(instrument)}>×</button></span> })}</div></div>
-    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}</small></div><label className="esst-eligible-toggle"><input type="checkbox" checked={item.esstEligible ?? true} onChange={() => toggleEsstEligible(item)} /> ESST eligible</label><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
+    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : ''}</small></div><label className="esst-eligible-toggle"><input type="checkbox" checked={item.esstEligible ?? true} onChange={() => toggleEsstEligible(item)} /> ESST eligible</label><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
     <div className="card setting-card"><h2>Contact availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Thursday</span><strong>4:30–5:30 PM</strong></div><div className="schedule-row"><span>Friday</span><strong>4:00–5:15 PM</strong></div><div className="schedule-row"><span>Saturday</span><strong>10:00 AM–12:00 PM</strong></div><div className="schedule-row"><span>Sunday</span><strong>1:00–3:00 PM</strong></div><div className="blackout"><strong>Note</strong><span>Sunday is hot leads only — nurture contacts wait until Monday.</span><span>A brand-new lead is contacted immediately, any day, regardless of these windows.</span></div><button className="secondary">Edit availability</button></div>
     <div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div>
     <div className="card setting-card"><h2>Enrollment agreement</h2><p>Track signature collection for every active student. Use this after a terms update to have everyone re-sign.</p><button className="secondary full" onClick={onRequestSignatures}>⚠ Major update to terms — collect signatures from all students</button><small className="muted" style={{ display: 'block', marginTop: 10 }}>This adds every current active student to Action Pending until their signature is collected. Inactive or unenrolled leads are never included.</small></div>
@@ -2131,7 +2166,7 @@ function upcomingEntryCoversSlot(entries: ScheduleEntry[], instructorId: string,
   })
 }
 
-function InstructorSchedule({ leads, instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange }: {
+function InstructorSchedule({ leads, instructors, availability, entries, openings, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onLeadTrialChange, onAcuitySync }: {
   leads: Lead[]
   instructors: Instructor[]
   availability: InstructorAvailability[]
@@ -2142,7 +2177,9 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   onOpeningsChange: (value: TrialOpening[]) => void
   onScheduleLog: (activity: ScheduleLogInput) => void
   onLeadTrialChange: (id: string, update: Partial<Lead>, outcome: string) => void
+  onAcuitySync: (instructorId: string, startsAtIso: string, isNowBookable: boolean) => Promise<{ ok: true } | { ok: false; conflict: boolean; message: string }>
 }) {
+  const toggleBusy = useRef(false)
   const [instructorId, setInstructorId] = useState(instructors[0]?.id ?? '')
   const instructor = instructors.find((item) => item.id === instructorId) ?? instructors[0]
   const [weekStart, setWeekStart] = useState(() => startOfScheduleWeek(new Date()))
@@ -2168,10 +2205,17 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     setInstructorId(id); setSlotEditor(null)
   }
 
-  const toggleOpening = (date: Date, time: string) => {
+  const toggleOpening = async (date: Date, time: string) => {
+    if (toggleBusy.current) return
     const startsAt = dateAtTime(date, time)
     const existing = openings.find((opening) => opening.instructor === instructor.name && new Date(opening.startsAt).getTime() === startsAt.getTime())
     if (existing) {
+      if (instructor.acuityCalendarId) {
+        toggleBusy.current = true
+        const result = await onAcuitySync(instructor.id, startsAt.toISOString(), false)
+        toggleBusy.current = false
+        if (!result.ok && result.conflict) { window.alert(result.message); return }
+      }
       onOpeningsChange(openings.filter((opening) => opening.id !== existing.id))
       onScheduleLog({ action: 'Trial opening removed', instructor: instructor.name, details: `${formatTrialTime(startsAt)} · ${instructor.instruments.join(' / ')}` })
     } else {
@@ -2185,6 +2229,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
       }
       onOpeningsChange([...openings, { id: crypto.randomUUID(), instructor: instructor.name, instruments: instructor.instruments, startsAt: startsAt.toISOString() }])
       onScheduleLog({ action: 'Trial opening added', instructor: instructor.name, details: `${formatTrialTime(startsAt)} · ${instructor.instruments.join(' / ')}` })
+      if (instructor.acuityCalendarId) void onAcuitySync(instructor.id, startsAt.toISOString(), true)
     }
   }
 

@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { Activity, EsstHoursEntry, EsstUsageEntry, Instructor, InstructorAvailability, Lead, ScheduleActivity, ScheduleEntry, TrialOpening } from './types'
+import type { AcuityEvent, Activity, EsstHoursEntry, EsstUsageEntry, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, ScheduleActivity, ScheduleEntry, TrialOpening } from './types'
 
 export interface WorkspaceData {
   leads: Lead[]
@@ -73,7 +73,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
   }
 
   const instructors: Instructor[] = (instructorResult.data ?? []).map((row) => ({
-    id: row.id, name: row.name, instruments: row.instruments ?? [], esstEligible: row.esst_eligible ?? true,
+    id: row.id, name: row.name, instruments: row.instruments ?? [], esstEligible: row.esst_eligible ?? true, acuityCalendarId: row.acuity_calendar_id ?? undefined,
   }))
   const instructorNames = new Map(instructors.map((instructor) => [instructor.id, instructor.name]))
 
@@ -146,6 +146,35 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
     })),
     instruments: settingsResult.data?.offered_instruments ?? undefined,
     messageTemplates: settingsResult.data?.message_templates ?? undefined,
+  }
+}
+
+export interface AcuityData { holds: Hold[]; events: AcuityEvent[]; feeCharges: FeeCharge[] }
+
+// Loaded separately from the main workspace (and refreshed on a timer) so a problem with these
+// read-only Acuity tables can never block the rest of the app from loading.
+export async function loadAcuityData(): Promise<AcuityData> {
+  const db = client()
+  const [holdResult, eventResult, feeResult] = await Promise.all([
+    fetchAllRows(db, 'holds', 'created_at', true),
+    fetchAllRows(db, 'acuity_events', 'received_at', true),
+    fetchAllRows(db, 'fee_charges', 'created_at', true),
+  ])
+  ;[holdResult, eventResult, feeResult].forEach((result) => assertOk(result.error))
+  return {
+    holds: (holdResult.data ?? []).map((row): Hold => ({
+      id: row.id, leadId: row.lead_id, instructorId: row.instructor_id, startsAt: row.starts_at, durationMinutes: row.duration_minutes ?? 30,
+      bookingLink: row.booking_link, createdAt: row.created_at, expiresAt: row.expires_at, status: row.status, acuityAppointmentId: row.acuity_appointment_id ?? undefined,
+    })),
+    events: (eventResult.data ?? []).map((row): AcuityEvent => ({
+      id: row.id, acuityAppointmentId: row.acuity_appointment_id ?? undefined, eventType: row.event_type,
+      appointment: row.payload?.appointment && !row.payload.appointment.fetchError ? row.payload.appointment : undefined,
+      receivedAt: row.received_at, handledAt: row.handled_at ?? undefined, handledAs: row.handled_as ?? undefined,
+    })),
+    feeCharges: (feeResult.data ?? []).map((row): FeeCharge => ({
+      id: row.id, leadId: row.lead_id, acuityAppointmentId: row.acuity_appointment_id ?? undefined, amountCents: row.amount_cents, reason: row.reason,
+      status: row.status, failureMessage: row.failure_message ?? undefined, waivedReason: row.waived_reason ?? undefined, createdAt: row.created_at,
+    })),
   }
 }
 
