@@ -117,6 +117,17 @@ const trialFormReminderFor = (lead: Lead, templates: Record<string, string> = de
     deadline: roundedDeadline(trialBookedAt(lead).getTime() + 24 * 60 * 60 * 1000),
   }),
 })
+const trialConfirmationFor = (lead: Lead, templates: Record<string, string>): MessageTemplate => ({
+  label: 'TRIAL CONFIRMATION',
+  message: applyTemplate(templates.trial_confirmation ?? defaultMessageTemplates.trial_confirmation, {
+    firstName: lead.name.split(' ')[0], instrument: leadInstrumentText(lead), trialTime: formatTrialTime(lead.trialAt!),
+  }),
+})
+// A confirmation text counts as sent only for the current booking; rescheduling the trial makes it due again.
+const confirmationSentFor = (lead: Lead) => {
+  const bookedAt = trialBookedAt(lead).getTime()
+  return lead.activities.some((activity) => activity.type === 'trial_update' && activity.outcome.startsWith('Confirmation text sent') && Date.parse(activity.occurredAt) >= bookedAt)
+}
 type HoldTiming = { startsAt: string; expiresAt: string }
 const holdLinkMessage = (lead: Lead, hold: HoldTiming & { bookingLink: string }, templates: Record<string, string>) =>
   applyTemplate(templates.acuity_hold_link ?? defaultMessageTemplates.acuity_hold_link, {
@@ -542,6 +553,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       return { error: (error as Error).message }
     }
   }
+  const logConfirmationSent = (lead: Lead) => addLeadActivity(lead.id, 'trial_update', `Confirmation text sent for ${lead.trialAt ? formatTrialTime(lead.trialAt) : 'the trial'}`)
   const sendHoldText = (lead: Lead, message: string, startsAtIso: string, again = false) => {
     void openMessages(lead.phone, message)
     addLeadActivity(lead.id, 'trial_update', `Booking link texted${again ? ' again' : ''} for ${formatTrialTime(startsAtIso)}`)
@@ -954,7 +966,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} onConfirmationSent={logConfirmationSent} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -962,7 +974,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
       </main>
 
-      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} onResumeCadenceNow={resumeCadenceNow} onLogReply={logReply} onMoveCadence={moveCadence} instructors={instructors} holds={holds} onCreateHold={createHold} onSendHoldText={sendHoldText} onReleaseHold={releaseHold} trialEntry={scheduleEntries.find((entry) => entry.leadId === selected.id && entry.kind === 'trial' && entry.startsAt && Date.parse(entry.startsAt) > Date.now())} />}
+      {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} onResumeCadenceNow={resumeCadenceNow} onLogReply={logReply} onMoveCadence={moveCadence} />}
       {showNewLead && <NewLeadModal instruments={offeredInstruments} onClose={() => setShowNewLead(false)} onSave={addLead} />}
       {siblingModalFor && <AddSiblingModal parent={siblingModalFor} instruments={offeredInstruments} onClose={() => setSiblingModalFor(null)} onSave={(input) => addSibling(siblingModalFor, input)} />}
       {unenrollPromptId && <ScheduleFollowUpModal lead={leads.find((lead) => lead.id === unenrollPromptId)!} title="When should we check back in?" description="They'll sit in Action Pending starting that day, until you mark it done." cancelLabel="Skip" defaultNote="Check in about re-enrolling" defaultOffsetDays={60} onCancel={() => setUnenrollPromptId(null)} onSchedule={(note, atIso) => { scheduleFollowUp(unenrollPromptId, note, atIso); setUnenrollPromptId(null) }} />}
@@ -1060,44 +1072,31 @@ function ReplyReceivedModal({ lead, kind, onClose, onSave }: { lead: Lead; kind:
   </div>
 }
 
-function HoldSlotModal({ lead, instructors, openings, holds, fixed, onClose, onCreate, onSendText }: { fixed?: { instructorId: string; startsAt: string }; lead: Lead; instructors: Instructor[]; openings: TrialOpening[]; holds: Hold[]; onClose: () => void; onCreate: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendText: (message: string, startsAtIso: string) => void }) {
-  const [instructorId, setInstructorId] = useState(fixed?.instructorId ?? instructors[0]?.id ?? '')
-  const [startsAt, setStartsAt] = useState(fixed?.startsAt ?? '')
+function AcuityLinkModal({ lead, instructor, startsAt, onClose, onCreate, onSendText }: { lead: Lead; instructor: Instructor; startsAt: string; onClose: () => void; onCreate: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendText: (message: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [created, setCreated] = useState<{ message: string; startsAt: string } | null>(null)
-  const instructor = instructors.find((item) => item.id === instructorId)
-  const heldTimes = new Set(holds.filter((hold) => hold.status === 'active' && hold.instructorId === instructorId).map((hold) => new Date(hold.startsAt).getTime()))
-  const slots = instructor ? openings
-    .filter((opening) => opening.instructor === instructor.name && Date.parse(opening.startsAt) > Date.now() && !heldTimes.has(new Date(opening.startsAt).getTime()))
-    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)) : []
+  const [message, setMessage] = useState<string | null>(null)
   const create = async () => {
     setBusy(true); setError('')
-    const result = await onCreate(lead, instructorId, startsAt)
+    const result = await onCreate(lead, instructor.id, startsAt)
     setBusy(false)
     if ('error' in result) setError(result.error)
-    else setCreated({ message: result.message, startsAt })
+    else setMessage(result.message)
   }
   return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
     <section className="modal time-picker">
       <button type="button" className="close" onClick={onClose}>×</button>
       <p className="eyebrow">{lead.name}</p>
-      {created ? <>
-        <h2>Hold created</h2>
-        <p className="muted">{formatTrialTime(created.startsAt)} is held for the next 24 hours. Now text them the booking link.</p>
-        <div className="message-preview"><strong>Message preview</strong><p>{created.message}</p></div>
-        <div className="picker-actions"><button type="button" className="secondary" onClick={onClose}>I’ll text later</button><button type="button" className="primary" onClick={() => onSendText(created.message, created.startsAt)}>Copy &amp; open Messages</button></div>
+      {message ? <>
+        <h2>Link ready</h2>
+        <p className="muted">{formatTrialTime(startsAt)} with {instructor.name} is held open on Acuity for the next 24 hours.</p>
+        <div className="message-preview"><strong>Message preview</strong><p>{message}</p></div>
+        <div className="picker-actions"><button type="button" className="secondary" onClick={onClose}>I’ll text later</button><button type="button" className="primary" onClick={() => onSendText(message)}>Copy &amp; open Messages</button></div>
       </> : <>
-        <h2>{fixed ? 'Text the Acuity booking link' : 'Hold a trial slot'}</h2>
-        {fixed
-          ? <p className="muted">{lead.name.split(' ')[0]}’s trial is on the schedule for {formatTrialTime(fixed.startsAt)} with {instructor?.name ?? 'the instructor'}. This holds that time open on Acuity for 24 hours so they can complete the booking form from the link.</p>
-          : <p className="muted">Pick a flagged trial opening to hold for {lead.name.split(' ')[0]}. It stays open for 24 hours, then releases if they haven’t booked.</p>}
-        {!fixed && instructors.length > 1 && <label className="field">Instructor<select value={instructorId} onChange={(event) => { setInstructorId(event.target.value); setStartsAt('') }}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}
-        {!fixed && <div className="time-options">{slots.map((opening) => <button type="button" key={opening.id} className={startsAt === opening.startsAt ? 'time-option selected' : 'time-option'} onClick={() => setStartsAt(opening.startsAt)}><span>{startsAt === opening.startsAt ? '✓' : '○'}</span><div><strong>{formatTrialTime(opening.startsAt)}</strong><small>Instructor: {opening.instructor}</small></div></button>)}
-          {!slots.length && <div className="picker-warning"><strong>No open trial times for {instructor?.name ?? 'this instructor'}.</strong><span>Flag some on the Instructor schedule tab first, then come back.</span></div>}
-        </div>}
-        {error && <p className="picker-warning"><strong>Couldn’t create the hold.</strong><span>{error}</span></p>}
-        <div className="picker-actions"><button type="button" className="secondary" onClick={onClose} disabled={busy}>Cancel</button><button type="button" className="primary" disabled={!startsAt || busy} onClick={() => void create()}>{busy ? 'Creating…' : 'Create hold'}</button></div>
+        <h2>Text the Acuity link</h2>
+        <p className="muted">{lead.name.split(' ')[0]}’s trial is on the schedule for {formatTrialTime(startsAt)} with {instructor.name}. This holds that time open on Acuity for 24 hours so they can complete the booking from the link.</p>
+        {error && <p className="picker-warning"><strong>Couldn’t create the link.</strong><span>{error}</span></p>}
+        <div className="picker-actions"><button type="button" className="secondary" onClick={onClose} disabled={busy}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={() => void create()}>{busy ? 'Creating…' : 'Create link'}</button></div>
       </>}
     </section>
   </div>
@@ -1180,9 +1179,12 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, acuityEvents, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, onConfirmationSent, acuityEvents, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
   holds: Hold[]
   onReleaseHold: (hold: Hold) => void
+  onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>
+  onSendHoldText: (lead: Lead, message: string, startsAtIso: string, again?: boolean) => void
+  onConfirmationSent: (lead: Lead) => void
   acuityEvents: AcuityEvent[]
   onConfirmBooking: (event: AcuityEvent, hold: Hold) => void
   onDeclineBooking: (event: AcuityEvent, hold: Hold) => void
@@ -1215,6 +1217,13 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   const [trialPrompt, setTrialPrompt] = useState<TrialPromptState | null>(null)
   const [callOutcomeLead, setCallOutcomeLead] = useState<Lead | null>(null)
   const [linkEvent, setLinkEvent] = useState<AcuityEvent | null>(null)
+  const [acuityLink, setAcuityLink] = useState<{ lead: Lead; instructor: Instructor; startsAt: string } | null>(null)
+  // A trial booked in the tracker whose instructor is linked to Acuity: the next step is texting them the Acuity link.
+  const acuityTrialFor = (lead: Lead) => {
+    const entry = scheduleEntries.find((item) => item.leadId === lead.id && item.kind === 'trial' && item.startsAt && Date.parse(item.startsAt) > Date.now())
+    const instructor = entry ? instructors.find((item) => item.id === entry.instructorId) : undefined
+    return entry && instructor?.acuityCalendarId ? { instructor, startsAt: entry.startsAt! } : undefined
+  }
   const bookingCards = bookingCardsFor(acuityEvents, holds, leads, instructors)
   const activeHolds = holds.filter((hold) => hold.status === 'active')
   const heldLeadIds = new Set(activeHolds.map((hold) => hold.leadId))
@@ -1237,6 +1246,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   })
   const nurture = leads.filter((lead) => lead.status === 'nurture' && !lead.followUpAt && !isCadencePaused(lead))
   const followUps = leads.filter((lead) => lead.followUpAt && lead.status !== 'unresponsive' && lead.status !== 'nurture_long_term')
+  const confirmations = leads.filter((lead) => lead.trialAt && Date.parse(lead.trialAt) > Date.now() && lead.holdFormComplete && lead.status !== 'unenrolled' && !confirmationSentFor(lead))
   const bookingFormReminders = leads.filter((lead) => lead.trialAt && !lead.holdFormComplete && lead.status !== 'unenrolled' && !heldLeadIds.has(lead.id))
   const planned = useMemo(() => [
     ...active.map((lead) => ({ lead, kind: 'active' as const, hold: undefined as Hold | undefined, recommendation: nextContact(lead, defaultAvailability, effectiveNowFor(lead)), template: activeFollowUpFor(lead, messageTemplates), progress: activeCadenceState(lead) })),
@@ -1247,8 +1257,14 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     }),
     ...bookingFormReminders.map((lead) => ({
       lead, kind: 'trial_form' as const, hold: undefined as Hold | undefined,
-      recommendation: { at: trialBookedAt(lead), reason: 'Trial booked — confirm the form', complete: false },
-      template: trialFormReminderFor(lead, messageTemplates),
+      recommendation: { at: trialBookedAt(lead), reason: acuityTrialFor(lead) ? 'Trial booked — text them the Acuity link' : 'Trial booked — confirm the form', complete: false },
+      template: acuityTrialFor(lead) ? { label: 'TEXT THE ACUITY LINK', message: '' } as MessageTemplate : trialFormReminderFor(lead, messageTemplates),
+      progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
+    })),
+    ...confirmations.map((lead) => ({
+      lead, kind: 'confirm' as const, hold: undefined as Hold | undefined,
+      recommendation: { at: trialBookedAt(lead), reason: 'Trial confirmed — text them the confirmation', complete: false },
+      template: trialConfirmationFor(lead, messageTemplates),
       progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
     })),
     ...activeHolds.flatMap((hold) => {
@@ -1266,7 +1282,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       template: { label: lead.followUpNote || 'Manual follow-up', message: lead.followUpNote ?? '', callFirst: false } as MessageTemplate,
       progress: { stage: 0, complete: false, callLogged: false, textLogged: false } as ReturnType<typeof activeCadenceState>,
     })),
-  ].filter((item) => !item.progress.complete).sort((a, b) => hotPriority(a.lead) - hotPriority(b.lead) || a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings, messageTemplates, holds])
+  ].filter((item) => !item.progress.complete).sort((a, b) => hotPriority(a.lead) - hotPriority(b.lead) || a.recommendation.at.getTime() - b.recommendation.at.getTime() || Date.parse(b.lead.receivedAt) - Date.parse(a.lead.receivedAt)), [leads, trialOpenings, messageTemplates, holds, scheduleEntries, instructors])
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
   const queue = planned.filter(({ recommendation }) => recommendation.at <= endOfToday)
@@ -1288,7 +1304,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
           return <article className="queue-row" key={lead.id}>
             <div className={`priority ${recommendation.at <= now ? 'urgent' : ''}`}>{index + 1}</div>
             <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {leadInstrumentLabel(lead)} · {lead.source}</span>{lastCallNote(lead) && <small className="last-call-note">📞 {lastCallNote(lead)}</small>}</div>
-            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' || kind === 'trial_form' || kind === 'hold' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
+            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' || kind === 'trial_form' || kind === 'hold' || kind === 'confirm' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
             <div className="row-actions">{kind === 'follow_up' ? <>
               <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
               <button onClick={() => setCallOutcomeLead(lead)}>☎ Log call</button>
@@ -1298,9 +1314,14 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
               <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead, { kind: 'follow_up', callLogged: false, textLogged: false })}>📅 Defer</button>
             </> : kind === 'trial_form' ? <>
               <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
-              <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
-              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+              {acuityTrialFor(lead)
+                ? <button className="text-now" onClick={() => { const link = acuityTrialFor(lead); if (link) setAcuityLink({ lead, ...link }) }}>↗ Text Acuity link</button>
+                : <><button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
+                  <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></>}
               <button className="prompt-no" onClick={() => onClearTrial(lead, { confirmMessage: `Cancel ${lead.name}'s trial? They didn't complete the registration form in time — this removes their slot from the instructor's calendar.`, outcome: 'Trial cancelled — registration form not completed in time' })}>✕ Didn't fill out — cancel trial</button>
+            </> : kind === 'confirm' ? <>
+              <button className="prompt-yes" onClick={() => onConfirmationSent(lead)}>✓ Mark sent</button>
+              <button className="text-now" onClick={() => { onTextNow(lead, template); onConfirmationSent(lead) }}>↗ Text confirmation</button>
             </> : kind === 'hold' ? <>
               <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about the booking form')}>✓ Log text</button>
               <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
@@ -1318,6 +1339,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       </div>
     </section>
     <AcuityBookingCards cards={bookingCards} instructors={instructors} onConfirm={onConfirmBooking} onDecline={onDeclineBooking} onLink={(event) => setLinkEvent(event)} onApplyChange={onApplyBookingChange} onCancelBooking={onCancelBooking} onDismiss={onDismissEvent} />
+    {acuityLink && <AcuityLinkModal lead={acuityLink.lead} instructor={acuityLink.instructor} startsAt={acuityLink.startsAt} onClose={() => setAcuityLink(null)} onCreate={onCreateHold} onSendText={(message) => { onSendHoldText(acuityLink.lead, message, acuityLink.startsAt); setAcuityLink(null) }} />}
     {linkEvent && <LinkBookingModal leads={leads} event={linkEvent} onClose={() => setLinkEvent(null)} onLink={(lead) => { onLinkBooking(linkEvent, lead); setLinkEvent(null) }} />}
     <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} onStatusChange={onStatusChange} />
     <section className="card upcoming-outreach-card">
@@ -2817,14 +2839,9 @@ function TrialTimePicker({ draft, openings, onClose, onManage, onSend }: { draft
   </section></div>
 }
 
-function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, siblings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp, onAddSibling, onSelectSibling, onResumeCadenceNow, onLogReply, onMoveCadence, instructors, holds, onCreateHold, onSendHoldText, onReleaseHold, trialEntry }: { trialEntry?: ScheduleEntry; instructors: Instructor[]; holds: Hold[]; onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { message: string }>; onSendHoldText: (lead: Lead, message: string, startsAtIso: string, again?: boolean) => void; onReleaseHold: (hold: Hold) => void; lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; siblings: Lead[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void; onAddSibling: () => void; onSelectSibling: (id: string) => void; onResumeCadenceNow: (lead: Lead) => void; onLogReply: (id: string, type: ReplyKind, occurredAt: string, tags: string[], note: string) => void; onMoveCadence: (id: string, outcome: string) => void }) {
+function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, siblings, onClose, onLog, onAddNote, onTextNow, onTrialUpdate, onClearTrial, onStatusChange, onDeleteActivity, onUpdateLead, onDeleteLead, onScheduleFollowUp, onResolveFollowUp, onAddSibling, onSelectSibling, onResumeCadenceNow, onLogReply, onMoveCadence }: { lead: Lead; instruments: string[]; trialOpenings: TrialOpening[]; messageTemplates: Record<string, string>; siblings: Lead[]; onClose: () => void; onLog: (id: string, type: ActivityType) => void; onAddNote: (id: string, note: string) => void; onTextNow: StartText; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void; onStatusChange: (id: string, status: LeadStatus) => void; onDeleteActivity: (leadId: string, activityId: string) => void; onUpdateLead: (id: string, update: Partial<Lead>) => void; onDeleteLead: (id: string) => void; onScheduleFollowUp: (id: string, note: string, atIso: string) => void; onResolveFollowUp: (lead: Lead) => void; onAddSibling: () => void; onSelectSibling: (id: string) => void; onResumeCadenceNow: (lead: Lead) => void; onLogReply: (id: string, type: ReplyKind, occurredAt: string, tags: string[], note: string) => void; onMoveCadence: (id: string, outcome: string) => void }) {
   const [editing, setEditing] = useState(false)
   const [moveOpen, setMoveOpen] = useState(false)
-  const [holdOpen, setHoldOpen] = useState(false)
-  const activeHold = holds.find((hold) => hold.leadId === lead.id && hold.status === 'active')
-  const trialInstructor = trialEntry ? instructors.find((item) => item.id === trialEntry.instructorId) : undefined
-  const canLinkExistingTrial = Boolean(lead.trialAt && !lead.holdFormComplete && trialEntry?.startsAt && trialInstructor?.acuityCalendarId && !activeHold)
-  const holdInstructors = instructors.filter((item) => item.acuityCalendarId && shareInstrument(item.instruments, lead.instruments))
   const [replyKind, setReplyKind] = useState<ReplyKind | null>(null)
   const isNurture = lead.status === 'nurture' || lead.status === 'nurture_long_term'
   const isActiveHotLead = lead.status === 'hot' && !lead.trialAt
@@ -2845,10 +2862,6 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, sibling
     {activeTemplate?.voicemail && <details className="script-box"><summary>{activeTemplate.voicemailLabel}</summary><p>{activeTemplate.voicemail}</p></details>}
     <div className="drawer-actions"><button className="primary" onClick={() => onTextNow(lead, messageTemplate)}>↗ Text now</button>{(!messageTemplate || messageTemplate.callFirst) && <button className="secondary" disabled={cadenceProgress?.callLogged} onClick={() => onLog(lead.id, 'call')}>{cadenceProgress?.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}<button className="secondary" disabled={cadenceProgress?.textLogged} onClick={() => onLog(lead.id, 'text')}>{cadenceProgress?.textLogged ? '✓ Text logged' : '✓ Log text'}</button><button className="secondary" onClick={() => setReplyKind('text_received')}>↙ Text received</button><button className="secondary" onClick={() => setReplyKind('call_received')}>↙ Call received</button></div>
     <TrialWorkflowEditor key={`${lead.id}-${lead.trialAt ?? 'none'}`} lead={lead} onTrialUpdate={onTrialUpdate} onClearTrial={onClearTrial} />
-    {(activeHold || !lead.trialAt || canLinkExistingTrial) && (activeHold
-      ? <section className="trial-workflow"><div className="trial-workflow-head"><div><strong>Acuity hold</strong><small>Holding {formatTrialTime(activeHold.startsAt)} with {instructors.find((item) => item.id === activeHold.instructorId)?.name ?? 'instructor'} until {roundedDeadline(Date.parse(activeHold.expiresAt))}</small></div></div><div className="drawer-actions"><button type="button" className="secondary" onClick={() => onSendHoldText(lead, holdLinkMessage(lead, activeHold, messageTemplates), activeHold.startsAt, true)}>↗ Text booking link again</button><button type="button" className="secondary" onClick={() => onReleaseHold(activeHold)}>Release hold</button></div></section>
-      : canLinkExistingTrial ? <button type="button" className="secondary" onClick={() => setHoldOpen(true)}>↗ Text Acuity booking link</button>
-      : holdInstructors.length > 0 && <button type="button" className="secondary" onClick={() => setHoldOpen(true)}>＋ Hold a slot &amp; text booking link</button>)}
     <LeadNoteComposer onSave={(note) => onAddNote(lead.id, note)} />
     <FollowUpComposer lead={lead} onSchedule={(note, atIso) => onScheduleFollowUp(lead.id, note, atIso)} onResolve={() => onResolveFollowUp(lead)} />
     {notes.length > 0 && <><h3>Saved notes</h3><div className="profile-notes">{notes.map((note) => <article key={note.id}><p>{note.outcome}</p><small>{formatDate(note.occurredAt)}</small></article>)}</div></>}
@@ -2856,7 +2869,7 @@ function LeadPanel({ lead, instruments, trialOpenings, messageTemplates, sibling
     <div className="details"><div><small>Received</small><strong>{formatDate(lead.receivedAt)}</strong></div><div><small>Campaign</small><strong>{lead.campaign}</strong></div><div><small>Total touches</small><strong>{touchCount(lead)}</strong></div></div>
     <h3>Activity</h3><div className="timeline">{[...lead.activities].reverse().map((activity) => <div key={activity.id}><i /><span><strong>{activity.type === 'cadence_change' ? 'Cadence moved' : isReplyActivity(activity.type) ? replyLabel(activity.type) : activity.type === 'call' ? 'Call' : activity.type === 'text' ? 'Text' : activity.type === 'note' ? 'Note' : activity.type === 'status_change' ? 'Status updated' : activity.type === 'trial_update' ? 'Trial updated' : activity.type === 'lead_created' ? 'New lead received' : activity.type === 'lead_update' ? 'Lead information updated' : activity.type}</strong><small>{formatDate(activity.occurredAt)}{activity.type === 'note' ? '' : ` · ${activity.outcome}`}{isReplyActivity(activity.type) && replyDelayNote(activity.type, minutesSinceLastText(lead.activities, activity.occurredAt, activity.id)) ? ` · ${replyDelayNote(activity.type, minutesSinceLastText(lead.activities, activity.occurredAt, activity.id))}` : ''}</small>{activity.type === 'note' && <small className="timeline-note-preview" title={activity.outcome}>{activity.outcome}</small>}</span>{(activity.type === 'call' || activity.type === 'text' || activity.type === 'note' || activity.type === 'cadence_change' || isReplyActivity(activity.type)) && <button className="timeline-delete" onClick={() => window.confirm('Delete this activity?') && onDeleteActivity(lead.id, activity.id)}>Delete</button>}</div>)}{!lead.activities.length && <p className="muted">No outreach logged yet.</p>}</div>
     <button className="delete-lead-button" onClick={() => onDeleteLead(lead.id)}>Delete lead permanently</button>
-  </aside></div>{holdOpen && <HoldSlotModal lead={lead} fixed={canLinkExistingTrial && trialEntry?.startsAt ? { instructorId: trialEntry.instructorId, startsAt: trialEntry.startsAt } : undefined} instructors={canLinkExistingTrial && trialInstructor ? [trialInstructor] : holdInstructors} openings={trialOpenings} holds={holds} onClose={() => setHoldOpen(false)} onCreate={onCreateHold} onSendText={(message, startsAtIso) => { onSendHoldText(lead, message, startsAtIso); setHoldOpen(false) }} />}{moveOpen && <CadenceMoveModal lead={lead} track={lead.status === 'nurture' ? 'nurture' : 'active'} onClose={() => setMoveOpen(false)} onSave={(outcome) => { onMoveCadence(lead.id, outcome); setMoveOpen(false) }} />}{replyKind && <ReplyReceivedModal lead={lead} kind={replyKind} onClose={() => setReplyKind(null)} onSave={(occurredAt, tags, note) => { onLogReply(lead.id, replyKind, occurredAt, tags, note); setReplyKind(null) }} />}{editing && <EditLeadModal lead={lead} instruments={instruments} onClose={() => setEditing(false)} onSave={(update) => { onUpdateLead(lead.id, update); setEditing(false) }} />}</>
+  </aside></div>{moveOpen && <CadenceMoveModal lead={lead} track={lead.status === 'nurture' ? 'nurture' : 'active'} onClose={() => setMoveOpen(false)} onSave={(outcome) => { onMoveCadence(lead.id, outcome); setMoveOpen(false) }} />}{replyKind && <ReplyReceivedModal lead={lead} kind={replyKind} onClose={() => setReplyKind(null)} onSave={(occurredAt, tags, note) => { onLogReply(lead.id, replyKind, occurredAt, tags, note); setReplyKind(null) }} />}{editing && <EditLeadModal lead={lead} instruments={instruments} onClose={() => setEditing(false)} onSave={(update) => { onUpdateLead(lead.id, update); setEditing(false) }} />}</>
 }
 
 function TrialWorkflowEditor({ lead, onTrialUpdate, onClearTrial }: { lead: Lead; onTrialUpdate: (id: string, update: Partial<Lead>, outcome: string) => void; onClearTrial: (lead: Lead) => void }) {
