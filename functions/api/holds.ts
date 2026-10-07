@@ -11,6 +11,7 @@ interface RequestBody {
   instructorId: string
   startsAt: string
   durationMinutes?: number
+  instrument?: string
 }
 
 // Creates a 24-hour hold for a family and returns the Acuity booking link to
@@ -28,14 +29,25 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   const acuity = getAcuityClient(context.env)
 
   const [{ data: instructor, error: instructorError }, { data: lead, error: leadError }] = await Promise.all([
-    db.from('instructors').select('id, name, acuity_calendar_id').eq('id', body.instructorId).single(),
-    db.from('leads').select('id, name, student_name, phone, email').eq('id', body.leadId).single(),
+    db.from('instructors').select('id, name, instruments, acuity_calendar_id').eq('id', body.instructorId).single(),
+    db.from('leads').select('id, name, student_name, phone, email, instruments, instrument').eq('id', body.leadId).single(),
   ])
   if (instructorError || !instructor) return Response.json({ error: 'Instructor not found.' }, { status: 404 })
   if (leadError || !lead) return Response.json({ error: 'Lead not found.' }, { status: 404 })
   if (!instructor.acuity_calendar_id) return Response.json({ error: `${instructor.name} has no Acuity calendar mapped yet.` }, { status: 400 })
-  if (!context.env.ACUITY_SCHEDULER_ID || !context.env.ACUITY_APPOINTMENT_TYPE_ID) {
-    return Response.json({ error: 'ACUITY_SCHEDULER_ID / ACUITY_APPOINTMENT_TYPE_ID are not configured yet.' }, { status: 400 })
+  if (!context.env.ACUITY_SCHEDULER_ID) return Response.json({ error: 'ACUITY_SCHEDULER_ID is not configured yet.' }, { status: 400 })
+
+  // Acuity has one trial appointment type per instrument (Piano, Guitar, ...), so the booking link
+  // needs the type for THIS lead's instrument that THIS instructor also teaches.
+  const instructorInstruments = (instructor.instruments ?? []).map((item: string) => item.toLowerCase())
+  const leadInstruments: string[] = lead.instruments?.length ? lead.instruments : lead.instrument ? [lead.instrument] : []
+  const candidates = body.instrument ? [body.instrument] : leadInstruments.filter((item) => instructorInstruments.includes(item.toLowerCase()))
+  const { data: appointmentTypes } = await db.from('acuity_appointment_types').select('instrument, appointment_type_id')
+  const appointmentType = candidates
+    .map((item) => (appointmentTypes ?? []).find((row) => row.instrument.toLowerCase() === item.toLowerCase()))
+    .find(Boolean)
+  if (!appointmentType) {
+    return Response.json({ error: `No Acuity trial appointment type is set up for ${(candidates.length ? candidates : leadInstruments).join(' / ') || 'this lead\'s instrument'} with ${instructor.name}.` }, { status: 400 })
   }
 
   const { data: openingMatch } = await db.from('trial_openings')
@@ -59,7 +71,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   const [firstName, ...rest] = lead.name.split(' ')
   const bookingLink = buildAcuityBookingLink({
     schedulerId: context.env.ACUITY_SCHEDULER_ID,
-    appointmentTypeId: context.env.ACUITY_APPOINTMENT_TYPE_ID,
+    appointmentTypeId: appointmentType.appointment_type_id,
     calendarId: instructor.acuity_calendar_id,
     startsAt: start,
     prefill: { firstName, lastName: rest.join(' '), email: lead.email ?? undefined, phone: lead.phone ?? undefined },

@@ -116,7 +116,8 @@ the mock Acuity/Stripe clients — no real credentials exist yet):**
 | Item | Value |
 |---|---|
 | Scheduler ID | `cd72e183` |
-| Trial appointment type ID | `93655035` (verify via `GET /appointment-types`) |
+| Trial appointment types | One per instrument (Piano 93643295, Guitar 93655035, Voice 93655274, Drums 93655206, Trumpet/Trombone 93655494, Sax/Flute/Clarinet 94539008, Ukulele 95470186) — stored in the `acuity_appointment_types` table (migration 015), not an env var; a new instrument is just a new row |
+| Calendars | Alex Thompson 14548947, Conor Stoebner 14123857, Faith Peterson 14123884, Kristina Olson 14211293, Luke Beck 14124874 |
 | Example teacher calendar ID | `14124874` (fetch all via `GET /calendars`, or run `scripts/list-acuity-calendars.mjs` once credentials exist) |
 | Timezone | `America/Chicago` (confirmed correct for every instructor) |
 
@@ -251,7 +252,7 @@ Cloudflare Pages Functions (`functions/`) deployed alongside the existing site,
 same project, same git-triggered deploy — no new hosting to manage. Secrets set
 in the Pages project dashboard (Settings → Environment variables):
 `SUPABASE_SERVICE_ROLE_KEY`, `ACUITY_USER_ID`, `ACUITY_API_KEY`,
-`ACUITY_SCHEDULER_ID`, `ACUITY_APPOINTMENT_TYPE_ID`, `STRIPE_SECRET_KEY`,
+`ACUITY_SCHEDULER_ID`, `STRIPE_SECRET_KEY`,
 `STRIPE_WEBHOOK_SECRET`, `CRON_SECRET`. Until Acuity/Stripe credentials exist,
 everything runs against the built-in mocks automatically (see
 `functions/_shared/acuityClient.ts` / `stripeClient.ts`).

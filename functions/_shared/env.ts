@@ -11,7 +11,6 @@ export interface Env {
   ACUITY_USER_ID?: string
   ACUITY_API_KEY?: string
   ACUITY_SCHEDULER_ID?: string
-  ACUITY_APPOINTMENT_TYPE_ID?: string
   ACUITY_MODE?: 'live' | 'mock'
 
   // Stripe. Same fallback-to-mock behavior as Acuity above.
