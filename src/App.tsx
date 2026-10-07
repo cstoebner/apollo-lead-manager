@@ -1298,45 +1298,48 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     upcomingMap.set(key, group)
   })
   const upcomingDays = [...upcomingMap.values()].sort((a, b) => a.date.getTime() - b.date.getTime()).slice(0, 5)
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
+  const renderRow = (item: (typeof planned)[number], badge: number | string) => {
+    const { lead, kind, hold, recommendation, template, progress } = item
+      const channel = template.callFirst ? 'Call, then text' : 'Text only'
+      return <article className="queue-row" key={lead.id}>
+        <div className={`priority ${recommendation.at <= now ? 'urgent' : ''}`}>{badge}</div>
+        <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {leadInstrumentLabel(lead)} · {lead.source}</span>{lastCallNote(lead) && <small className="last-call-note">📞 {lastCallNote(lead)}</small>}</div>
+        <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' || kind === 'trial_form' || kind === 'hold' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
+        <div className="row-actions">{kind === 'follow_up' ? <>
+          <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
+          <button onClick={() => setCallOutcomeLead(lead)}>☎ Log call</button>
+          <button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button>
+          <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
+          <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+          <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead, { kind: 'follow_up', callLogged: false, textLogged: false })}>📅 Defer</button>
+        </> : kind === 'trial_form' ? <>
+          <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
+          {acuityTrialFor(lead)
+            ? <button className="text-now" onClick={() => { const link = acuityTrialFor(lead); if (link) setAcuityLink({ lead, ...link }) }}>↗ Reservation + link</button>
+            : <><button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
+              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></>}
+          <button className="prompt-no" onClick={() => onClearTrial(lead, { confirmMessage: `Cancel ${lead.name}'s trial? They didn't complete the registration form in time — this removes their slot from the instructor's calendar.`, outcome: 'Trial cancelled — registration form not completed in time' })}>✕ Didn't fill out — cancel trial</button>
+        </> : kind === 'hold' ? <>
+          <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about the booking form')}>✓ Log text</button>
+          <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+          <button onClick={() => hold && onSendHoldText(lead, holdLinkOnlyMessage(lead, hold, messageTemplates), hold.startsAt, 'link')}>↗ Text link</button>
+          <button className="prompt-no" onClick={() => hold && onReleaseHold(hold)}>✕ Release hold</button>
+        </> : <>
+          {template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}
+          <button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button>
+          <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
+          <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
+          <button className="defer-button" title="Schedule a follow-up date and drop this out of Next Actions until then" onClick={() => onDeferFollowUp(lead, { kind, callLogged: progress.callLogged, textLogged: progress.textLogged })}>📅 Defer</button>
+        </>}</div>
+      </article>
+  }
 
   return <>
     <section className="card queue-card">
       <div className="section-head"><div><h2>Next actions</h2><p>Hot leads and nurture contacts, ordered by who should hear from you next.</p></div><span className="live-pill">● Priority order</span></div>
       <div className="queue-list">
-        {queue.map(({ lead, kind, hold, recommendation, template, progress }, index) => {
-          const channel = template.callFirst ? 'Call, then text' : 'Text only'
-          return <article className="queue-row" key={lead.id}>
-            <div className={`priority ${recommendation.at <= now ? 'urgent' : ''}`}>{index + 1}</div>
-            <div className="lead-main" onClick={() => onSelect(lead.id)}><strong>{lead.name}</strong><span>{statusLabels[lead.status]} · {leadInstrumentLabel(lead)} · {lead.source}</span>{lastCallNote(lead) && <small className="last-call-note">📞 {lastCallNote(lead)}</small>}</div>
-            <div className="recommendation"><strong>{recommendation.at <= now ? 'Now' : formatDate(recommendation.at)}</strong><span>{recommendation.reason}{kind === 'follow_up' || kind === 'trial_form' || kind === 'hold' ? '' : ` · ${channel}`}</span><em>{template.label}</em>{template.needsTimes && <small>Two trial times still need to be filled in.</small>}</div>
-            <div className="row-actions">{kind === 'follow_up' ? <>
-              <button className="prompt-yes" onClick={() => onResolveFollowUp(lead)}>✓ Done</button>
-              <button onClick={() => setCallOutcomeLead(lead)}>☎ Log call</button>
-              <button onClick={() => onLog(lead.id, 'text')}>✓ Log text</button>
-              <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
-              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
-              <button className="defer-button" title="Push this follow-up out to a later date" onClick={() => onDeferFollowUp(lead, { kind: 'follow_up', callLogged: false, textLogged: false })}>📅 Defer</button>
-            </> : kind === 'trial_form' ? <>
-              <button className="prompt-yes" onClick={() => setTrialPrompt({ lead, reason: 'booking_form', decision: 'yes' })}>✓ Already filled out</button>
-              {acuityTrialFor(lead)
-                ? <button className="text-now" onClick={() => { const link = acuityTrialFor(lead); if (link) setAcuityLink({ lead, ...link }) }}>↗ Reservation + link</button>
-                : <><button onClick={() => onLog(lead.id, 'text', 'Texted to remind about filling out the registration form')}>✓ Log text</button>
-                  <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button></>}
-              <button className="prompt-no" onClick={() => onClearTrial(lead, { confirmMessage: `Cancel ${lead.name}'s trial? They didn't complete the registration form in time — this removes their slot from the instructor's calendar.`, outcome: 'Trial cancelled — registration form not completed in time' })}>✕ Didn't fill out — cancel trial</button>
-            </> : kind === 'hold' ? <>
-              <button onClick={() => onLog(lead.id, 'text', 'Texted to remind about the booking form')}>✓ Log text</button>
-              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
-              <button onClick={() => hold && onSendHoldText(lead, holdLinkOnlyMessage(lead, hold, messageTemplates), hold.startsAt, 'link')}>↗ Text link</button>
-              <button className="prompt-no" onClick={() => hold && onReleaseHold(hold)}>✕ Release hold</button>
-            </> : <>
-              {template.callFirst && <button disabled={progress.callLogged} onClick={() => setCallOutcomeLead(lead)}>{progress.callLogged ? '✓ Call logged' : '☎ Log call'}</button>}
-              <button disabled={progress.textLogged} onClick={() => onLog(lead.id, 'text')}>{progress.textLogged ? '✓ Text logged' : '✓ Log text'}</button>
-              <button onClick={() => onTakeNote(lead.id)}>✎ Take note</button>
-              <button className="text-now" onClick={() => onTextNow(lead, template)}>↗ Text now</button>
-              <button className="defer-button" title="Schedule a follow-up date and drop this out of Next Actions until then" onClick={() => onDeferFollowUp(lead, { kind, callLogged: progress.callLogged, textLogged: progress.textLogged })}>📅 Defer</button>
-            </>}</div>
-          </article>
-        })}
+        {queue.map((item, index) => renderRow(item, index + 1))}
         {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
@@ -1348,7 +1351,18 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
       <div className="upcoming-outreach-list">{upcomingDays.map(({ date, items }) => {
         const earliest = items[0].recommendation.at
-        return <article key={date.toDateString()}><div className="outreach-date"><strong>{date.toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div><div className="outreach-preview"><strong>{items.length} planned {items.length === 1 ? 'contact' : 'contacts'}</strong><span>{items.slice(0, 4).map((item) => `${item.lead.name} · ${item.template.label}`).join('  •  ')}{items.length > 4 ? `  •  +${items.length - 4} more` : ''}</span></div><b>Be available around {earliest.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</b></article>
+        const dayKey = date.toDateString()
+        const expanded = expandedDays.has(dayKey)
+        const toggle = () => setExpandedDays((current) => { const next = new Set(current); if (next.has(dayKey)) next.delete(dayKey); else next.add(dayKey); return next })
+        return <article key={dayKey} className={expanded ? 'outreach-day expanded' : 'outreach-day'}>
+          <div className="outreach-summary" role="button" tabIndex={0} aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle() } }}>
+            <div className="outreach-date"><strong>{date.toLocaleDateString('en-US', { weekday: 'short' })}</strong><span>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div>
+            <div className="outreach-preview"><strong>{items.length} planned {items.length === 1 ? 'contact' : 'contacts'}</strong><span>{items.slice(0, 4).map((item) => `${item.lead.name} · ${item.template.label}`).join('  •  ')}{items.length > 4 ? `  •  +${items.length - 4} more` : ''}</span></div>
+            <b>Be available around {earliest.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</b>
+            <i className="outreach-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</i>
+          </div>
+          {expanded && <div className="queue-list outreach-expanded">{items.map((item) => renderRow(item, '•'))}</div>}
+        </article>
       })}{!upcomingDays.length && <div className="today-complete"><strong>No upcoming outreach scheduled</strong><span>New leads and future cadence dates will appear here.</span></div>}</div>
     </section>
     {trialPrompt && <TrialPromptModal prompt={trialPrompt} instructors={instructors} onClose={() => setTrialPrompt(null)} onConfirmYes={(occurredAt) => { onResolveTrialYes(trialPrompt.lead, trialPrompt.reason, occurredAt); setTrialPrompt(null) }} onConfirmNo={(comment) => { onResolveTrialNo(trialPrompt.lead, comment); setTrialPrompt(null) }} onConfirmSecondTrial={(instructorId, occurredAt) => { onResolveSecondTrial(trialPrompt.lead, instructorId, occurredAt); setTrialPrompt(null) }} />}
