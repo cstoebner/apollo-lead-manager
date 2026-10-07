@@ -13,6 +13,7 @@ export const defaultMessageTemplates: Record<string, string> = {
   nurture_week10: 'Hi {{firstName}}, are you still thinking about {{instrument}} lessons?\n\n1️⃣ Yes, I’d like to schedule a free trial\n2️⃣ Maybe later\n3️⃣ I’m no longer interested\n4️⃣ I have a question\n\nJust reply with the number that fits best.',
   nurture_week12: 'Hi {{firstName}}, I wanted to make one last regular check-in about {{instrument}} lessons. Apollo will be here whenever the timing is right.\n\nAfter this, I’ll only reach out occasionally when relevant openings or new scheduling options come up. If you’d rather not receive those updates, just let me know.',
   nurture_long_term: 'Hi {{firstName}}, a couple of {{instrument}} trial openings have become available, so I wanted to check with you:\n\n1️⃣ [Day/Time 1]\n2️⃣ [Day/Time 2]\n\nWould either work for you?',
+  acuity_hold_link: 'Hi {{firstName}}, I’m holding {{trialTime}} for {{studentPossessive}} free {{instrument}} trial lesson for the next 24 hours.\n\nTo lock it in, please book here: {{bookingLink}}\n\nIf I don’t see it by {{deadline}}, I’ll release the time and we can look at other options when you’re ready.',
   trial_form_reminder: 'Hi {{firstName}}, I’m still holding {{trialTime}} until {{deadline}}, but I haven’t seen the registration form come through yet.\n\nIf you’d like to keep the trial time, please complete it by then. Otherwise, I’ll release the appointment and we can look at other options when you’re ready.',
 }
 
@@ -44,6 +45,7 @@ export const messageTemplateGroups: { title: string; items: { key: string; label
   {
     title: 'Trial reminders',
     items: [
+      { key: 'acuity_hold_link', label: 'Hold + booking link', variables: ['firstName', 'trialTime', 'deadline', 'bookingLink', 'studentPossessive', 'instrument'] },
       { key: 'trial_form_reminder', label: 'Booking form reminder', variables: ['firstName', 'trialTime', 'deadline', 'studentPossessive', 'instrument'] },
     ],
   },

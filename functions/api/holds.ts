@@ -16,7 +16,7 @@ interface RequestBody {
 }
 
 // Creates a 24-hour hold for a family and returns the Acuity booking link to
-// text them. If the slot isn't already a flagged Trial Opening (the rare
+// text them (the app logs the activity itself, so it isn't duplicated here). If the slot isn't already a flagged Trial Opening (the rare
 // off-schedule exception case), this also temporarily deletes any block
 // covering it -- see docs/acuity-integration-plan.md section 7c/7d for why the
 // block is NOT automatically restored on expiry (nightly reconciliation does
@@ -94,12 +94,5 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   }).select('id').single()
   if (holdError || !hold) return Response.json({ error: holdError?.message ?? 'Could not create the hold.' }, { status: 500 })
 
-  await db.from('activities').insert({
-    lead_id: lead.id,
-    type: 'trial_update',
-    occurred_at: new Date().toISOString(),
-    outcome: `Hold created with ${instructor.name} — expires in 24 hours if not booked`,
-  })
-
-  return Response.json({ ok: true, holdId: hold.id, bookingLink })
+  return Response.json({ ok: true, holdId: hold.id, bookingLink, expiresAt: expiresAt.toISOString() })
 })
