@@ -2454,7 +2454,11 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const saveEntry = (next: ScheduleEntry) => {
     const existing = entries.find((entry) => entry.id === next.id)
     if (next.kind === 'trial' && !next.leadId) { window.alert('Choose a lead from the list before scheduling the trial.'); return }
-    if (next.kind === 'trial' && entries.some((entry) => entry.id !== next.id && entry.kind === 'trial' && entry.leadId === next.leadId)) { window.alert('That lead already has a trial on the instructor schedule. Edit their existing trial instead.'); return }
+    // A lead can only have one upcoming trial. If their earlier trial is already in the past, this is a second trial and replaces it (same as the "Second trial" button).
+    const priorTrials = next.kind === 'trial' ? entries.filter((entry) => entry.id !== next.id && entry.kind === 'trial' && entry.leadId === next.leadId) : []
+    const upcomingTrial = priorTrials.find((entry) => Date.parse(entry.startsAt!) > Date.now())
+    if (upcomingTrial) { window.alert(`That lead already has an upcoming trial on ${formatTrialTime(upcomingTrial.startsAt!)}. Edit or move that trial instead.`); return }
+    const supersededTrialIds = new Set(priorTrials.map((entry) => entry.id))
     const date = next.kind === 'regular' ? new Date(`${next.startsOn}T${next.startTime}:00`) : new Date(next.startsAt!)
     const time = next.kind === 'regular' ? next.startTime! : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     if (next.kind === 'regular' && date.getDay() !== next.dayOfWeek) { window.alert(`The start date must fall on ${scheduleDays.find((day) => day.dayOfWeek === next.dayOfWeek)?.label}.`); return }
@@ -2499,7 +2503,8 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
         }
       }
     }
-    const savedEntries = entries.some((entry) => entry.id === next.id) ? entries.map((entry) => entry.id === next.id ? next : entry) : [...entries, next]
+    const keptEntries = entries.filter((entry) => !supersededTrialIds.has(entry.id))
+    const savedEntries = keptEntries.some((entry) => entry.id === next.id) ? keptEntries.map((entry) => entry.id === next.id ? next : entry) : [...keptEntries, next]
     onEntriesChange(autoBreak ? [...savedEntries, autoBreak] : savedEntries)
     onOpeningsChange(openings.filter((opening) => {
       if (opening.instructor !== instructor.name) return true
@@ -2523,7 +2528,8 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
     }
     if (next.kind === 'trial' && next.leadId && next.startsAt) {
       const selectedLead = leads.find((lead) => lead.id === next.leadId)
-      onLeadTrialChange(next.leadId, { trialAt: next.startsAt }, selectedLead?.trialAt ? `Trial rescheduled to ${formatTrialTime(next.startsAt)} from the instructor schedule` : `Trial booked for ${formatTrialTime(next.startsAt)} from the instructor schedule`)
+      if (supersededTrialIds.size) onLeadTrialChange(next.leadId, { trialAt: next.startsAt, holdFormComplete: false, trialAttended: false }, `Second trial lesson scheduled for ${formatTrialTime(next.startsAt)}`)
+      else onLeadTrialChange(next.leadId, { trialAt: next.startsAt }, selectedLead?.trialAt ? `Trial rescheduled to ${formatTrialTime(next.startsAt)} from the instructor schedule` : `Trial booked for ${formatTrialTime(next.startsAt)} from the instructor schedule`)
     }
     setSlotEditor(null)
   }
