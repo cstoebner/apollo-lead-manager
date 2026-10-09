@@ -264,7 +264,7 @@ export async function syncInstructors(previous: Instructor[], next: Instructor[]
     assertOk(error)
   }
   if (next.length) {
-    const { error } = await db.from('instructors').upsert(next.map((item) => ({ id: item.id, name: item.name, instruments: item.instruments })))
+    const { error } = await db.from('instructors').upsert(next.map((item) => ({ id: item.id, name: item.name, instruments: item.instruments, ...(item.acuityCalendarId !== undefined ? { acuity_calendar_id: item.acuityCalendarId || null } : {}) })))
     assertOk(error)
   }
 }

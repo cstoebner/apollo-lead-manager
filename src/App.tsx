@@ -886,7 +886,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const saveMessageTemplate = (key: string, value: string) => { setMessageTemplateOverrides((current) => { const next = { ...current, [key]: value }; persist(saveMessageTemplates(next)); return next }) }
   const resetMessageTemplate = (key: string) => { setMessageTemplateOverrides((current) => { const next = { ...current }; delete next[key]; persist(saveMessageTemplates(next)); return next }) }
   // Renames and instrument changes land together so trial openings (which carry the instructor's name) stay linked.
-  const updateInstructor = (id: string, patch: { name: string; instruments: string[] }) => {
+  const updateInstructor = (id: string, patch: { name: string; instruments: string[]; acuityCalendarId?: string }) => {
     const previous = instructors.find((item) => item.id === id)
     if (!previous) return
     const nextInstructors = instructors.map((item) => item.id === id ? { ...item, ...patch } : item)
@@ -1939,7 +1939,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
   messageTemplates: Record<string, string>
   onInstrumentsChange: (value: string[]) => void
   onInstructorsChange: (value: Instructor[]) => void
-  onUpdateInstructor: (id: string, patch: { name: string; instruments: string[] }) => void
+  onUpdateInstructor: (id: string, patch: { name: string; instruments: string[]; acuityCalendarId?: string }) => void
   onAvailabilityChange: (value: InstructorAvailability[]) => void
   onEntriesChange: (value: ScheduleEntry[]) => void
   onOpeningsChange: (value: TrialOpening[]) => void
@@ -1990,13 +1990,15 @@ function Settings({ instruments, leads, instructors, availability, entries, open
     onScheduleLog({ action: 'Instructor removed', instructor: item.name, details: `${item.instruments.join(' / ')} · Schedule data removed` })
   }
 
-  const saveInstructor = (item: Instructor, next: { name: string; instruments: string[] }) => {
+  const saveInstructor = (item: Instructor, next: { name: string; instruments: string[]; acuityCalendarId?: string }) => {
     const name = next.name.trim()
     if (!name) { window.alert('The instructor needs a name.'); return }
     if (!next.instruments.length) { window.alert('Select at least one instrument.'); return }
     if (instructors.some((instructor) => instructor.id !== item.id && instructor.name.toLowerCase() === name.toLowerCase())) { window.alert('Another instructor already has that name.'); return }
     const instrumentsChanged = item.instruments.join(',') !== next.instruments.join(',')
-    onUpdateInstructor(item.id, { name, instruments: next.instruments })
+    const calendarChanged = next.acuityCalendarId !== undefined && (next.acuityCalendarId || '') !== (item.acuityCalendarId ?? '')
+    onUpdateInstructor(item.id, { name, instruments: next.instruments, ...(calendarChanged ? { acuityCalendarId: next.acuityCalendarId } : {}) })
+    if (calendarChanged) onScheduleLog({ action: 'Acuity calendar linked', instructor: name, details: next.acuityCalendarId ? `Calendar ${next.acuityCalendarId}` : 'Unlinked from Acuity' })
     if (name !== item.name) onScheduleLog({ action: 'Instructor renamed', instructor: name, details: `${item.name} → ${name}` })
     if (instrumentsChanged) onScheduleLog({ action: 'Instructor instruments updated', instructor: name, details: `${item.instruments.join(' / ')} → ${next.instruments.join(' / ')}` })
     setEditingInstructor(null)
@@ -2004,7 +2006,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
 
   return <><section className="settings-grid">
     <div className="card setting-card settings-wide"><h2>Instruments offered</h2><p>This list controls the instrument choices used throughout the lead manager.</p><form className="settings-add-row" onSubmit={(event) => { event.preventDefault(); addInstrument() }}><input value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)} placeholder="Add an instrument" /><button className="primary" type="submit" disabled={!newInstrument.trim()}>＋ Add</button></form><div className="settings-item-list">{instruments.map((instrument) => { const used = instrumentIsUsed(instrument); return <span key={instrument}><b>{instrument}</b>{used && <small>In use</small>}<button disabled={used} title={used ? `${instrument} is currently in use` : `Remove ${instrument}`} onClick={() => removeInstrument(instrument)}>×</button></span> })}</div></div>
-    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : ''}</small></div><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
+    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : isSupabaseConfigured ? ' · Not linked to Acuity' : ''}</small></div><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
     <div className="card setting-card"><h2>Contact availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Thursday</span><strong>4:30–5:30 PM</strong></div><div className="schedule-row"><span>Friday</span><strong>4:00–5:15 PM</strong></div><div className="schedule-row"><span>Saturday</span><strong>10:00 AM–12:00 PM</strong></div><div className="schedule-row"><span>Sunday</span><strong>1:00–3:00 PM</strong></div><div className="blackout"><strong>Note</strong><span>Sunday is hot leads only — nurture contacts wait until Monday.</span><span>A brand-new lead is contacted immediately, any day, regardless of these windows.</span></div><button className="secondary">Edit availability</button></div>
     <div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div>
     <div className="card setting-card"><h2>Enrollment agreement</h2><p>Track signature collection for every active student. Use this after a terms update to have everyone re-sign.</p><button className="secondary full" onClick={onRequestSignatures}>⚠ Major update to terms — collect signatures from all students</button><small className="muted" style={{ display: 'block', marginTop: 10 }}>This adds every current active student to Action Pending until their signature is collected. Inactive or unenrolled leads are never included.</small></div>
@@ -2016,7 +2018,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
       <h3>{group.title}</h3>
       {group.items.map((item) => <MessageTemplateEditor key={item.key} template={item} value={messageTemplates[item.key] ?? defaultMessageTemplates[item.key]} onSave={(value) => onSaveTemplate(item.key, value)} onReset={() => onResetTemplate(item.key)} />)}
     </div>)}
-  </section>{editingInstructor && <InstructorEditor instrumentOptions={instruments} instructor={editingInstructor} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(next) => saveInstructor(editingInstructor, next)} />}</>
+  </section>{editingInstructor && <InstructorEditor instrumentOptions={instruments} instructor={editingInstructor} calendarsInUse={Object.fromEntries(instructors.filter((item) => item.id !== editingInstructor.id && item.acuityCalendarId).map((item) => [item.acuityCalendarId!, item.name]))} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(next) => saveInstructor(editingInstructor, next)} />}</>
 }
 
 function MessageTemplateEditor({ template, value, onSave, onReset }: { template: { key: string; label: string; variables: string[] }; value: string; onSave: (value: string) => void; onReset: () => void }) {
@@ -2619,17 +2621,25 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   </section>
 }
 
-function InstructorEditor({ instrumentOptions, instructor, lockedInstruments, onClose, onSave }: {
+function InstructorEditor({ instrumentOptions, instructor, lockedInstruments, calendarsInUse, onClose, onSave }: {
+  calendarsInUse: Record<string, string>
   instrumentOptions: string[]
   instructor: Instructor
   lockedInstruments: string[]
   onClose: () => void
-  onSave: (next: { name: string; instruments: string[] }) => void
+  onSave: (next: { name: string; instruments: string[]; acuityCalendarId?: string }) => void
 }) {
   const [name, setName] = useState(instructor.name)
+  const [calendarId, setCalendarId] = useState(instructor.acuityCalendarId ?? '')
+  const [calendars, setCalendars] = useState<{ id: string; name: string }[] | null>(null)
+  const [calendarError, setCalendarError] = useState('')
+  useEffect(() => {
+    if (!isSupabaseConfigured) return
+    callApi<{ calendars: { id: string; name: string }[] }>('/api/acuity-calendars', {}).then((result) => setCalendars(result.calendars)).catch((error: Error) => setCalendarError(error.message))
+  }, [])
   const [selected, setSelected] = useState(instructor.instruments)
   const toggle = (instrument: string, checked: boolean) => setSelected((current) => checked ? Array.from(new Set([...current, instrument])) : current.filter((item) => item !== instrument))
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal instructor-editor" onSubmit={(event) => { event.preventDefault(); onSave({ name, instruments: selected }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Edit instructor</p><h2>{instructor.name}</h2><label className="field">Name<input required value={name} onChange={(event) => setName(event.target.value)} /></label><p className="muted">Choose every instrument this instructor can teach. Their availability and scheduled lessons will stay exactly as they are.</p><div className="instrument-checks editor-instrument-checks">{instrumentOptions.map((instrument) => {
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal instructor-editor" onSubmit={(event) => { event.preventDefault(); onSave({ name, instruments: selected, acuityCalendarId: calendarId }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Edit instructor</p><h2>{instructor.name}</h2><label className="field">Name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>{isSupabaseConfigured && <label className="field">Acuity calendar<select value={calendarId} onChange={(event) => setCalendarId(event.target.value)}><option value="">Not linked to Acuity</option>{(calendars ?? (instructor.acuityCalendarId ? [{ id: instructor.acuityCalendarId, name: `Calendar ${instructor.acuityCalendarId}` }] : [])).map((calendar) => <option key={calendar.id} value={calendar.id} disabled={Boolean(calendarsInUse[calendar.id])}>{calendar.name}{calendarsInUse[calendar.id] ? ` — already linked to ${calendarsInUse[calendar.id]}` : ''}</option>)}</select><small>{calendarError ? `Couldn’t load your Acuity calendars (${calendarError}).` : calendars ? 'Linking lets trial slots, holds and bookings work for this instructor. Tonight’s sync will then block everything on their calendar except flagged trial openings.' : 'Loading your Acuity calendars…'}</small></label>}<p className="muted">Choose every instrument this instructor can teach. Their availability and scheduled lessons will stay exactly as they are.</p><div className="instrument-checks editor-instrument-checks">{instrumentOptions.map((instrument) => {
     const locked = lockedInstruments.includes(instrument)
     return <label className={locked ? 'locked-instrument' : ''} key={instrument}><input type="checkbox" checked={selected.includes(instrument)} disabled={locked} onChange={(event) => toggle(instrument, event.target.checked)} /> <span>{instrument}{locked && <small>Scheduled</small>}</span></label>
   })}</div><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!selected.length || !name.trim()}>Save changes</button></div></form></div>
