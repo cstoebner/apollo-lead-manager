@@ -6,15 +6,14 @@ import { ApiError, callApi } from './api'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, latestCadenceCheckpoint, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt, nurtureWeekFor } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
-import { loadAcuityData, loadWorkspaceData, removeActivity as removeStoredActivity, removeEsstHoursEntry as removeStoredEsstHoursEntry, removeEsstUsageEntry as removeStoredEsstUsageEntry, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveEsstHoursEntry, saveEsstUsageEntry, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
+import { loadAcuityData, loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import type { WorkspaceData } from './database'
-import { ESST_ACCRUAL_DIVISOR, ESST_BALANCE_CAP, esstSummaryFor } from './esst'
 import { applyTemplate, defaultMessageTemplates, messageTemplateGroups } from './messageTemplates'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured, supabase } from './supabase'
-import type { AcuityAppointmentSnapshot, AcuityEvent, Activity, ActivityType, EsstHoursEntry, EsstUsageEntry, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
+import type { AcuityAppointmentSnapshot, AcuityEvent, Activity, ActivityType, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
-type View = 'today' | 'leads' | 'openings' | 'activity' | 'esst' | 'settings'
+type View = 'today' | 'leads' | 'openings' | 'activity' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean; callFirst?: boolean }
 type StartText = (lead: Lead, template?: MessageTemplate) => void
 type TextDraft = { lead: Lead; label: string; message: string }
@@ -324,8 +323,6 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [instructorAvailability, setInstructorAvailability] = useState(isSupabaseConfigured ? [] : demoInstructorAvailability)
   const [scheduleEntries, setScheduleEntries] = useState(isSupabaseConfigured ? [] : demoScheduleEntries)
   const [scheduleActivities, setScheduleActivities] = useState<ScheduleActivity[]>([])
-  const [esstHoursEntries, setEsstHoursEntries] = useState<EsstHoursEntry[]>([])
-  const [esstUsageEntries, setEsstUsageEntries] = useState<EsstUsageEntry[]>([])
   const [holds, setHolds] = useState<Hold[]>([])
   const [acuityEvents, setAcuityEvents] = useState<AcuityEvent[]>([])
   const [feeCharges, setFeeCharges] = useState<FeeCharge[]>([])
@@ -359,8 +356,6 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setScheduleEntries(data.entries)
       setTrialOpenings(data.openings)
       setScheduleActivities(data.scheduleActivities)
-      setEsstHoursEntries(data.esstHoursEntries)
-      setEsstUsageEntries(data.esstUsageEntries)
       setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
       setMessageTemplateOverrides(data.messageTemplates ?? {})
       setLoadingData(false)
@@ -890,33 +885,21 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const replaceInstruments = (next: string[]) => { setOfferedInstruments(next); persist(saveSettings(next)) }
   const saveMessageTemplate = (key: string, value: string) => { setMessageTemplateOverrides((current) => { const next = { ...current, [key]: value }; persist(saveMessageTemplates(next)); return next }) }
   const resetMessageTemplate = (key: string) => { setMessageTemplateOverrides((current) => { const next = { ...current }; delete next[key]; persist(saveMessageTemplates(next)); return next }) }
+  // Renames and instrument changes land together so trial openings (which carry the instructor's name) stay linked.
+  const updateInstructor = (id: string, patch: { name: string; instruments: string[] }) => {
+    const previous = instructors.find((item) => item.id === id)
+    if (!previous) return
+    const nextInstructors = instructors.map((item) => item.id === id ? { ...item, ...patch } : item)
+    const nextOpenings = trialOpenings.map((opening) => opening.instructor === previous.name ? { ...opening, instructor: patch.name, instruments: patch.instruments } : opening)
+    setInstructors(nextInstructors)
+    setTrialOpenings(nextOpenings)
+    persist(syncInstructors(instructors, nextInstructors).then(() => syncOpenings(trialOpenings, nextOpenings, nextInstructors)))
+  }
   const replaceInstructors = (next: Instructor[]) => { const previous = instructors; setInstructors(next); persist(syncInstructors(previous, next)) }
   const replaceAvailability = (next: InstructorAvailability[]) => { const previous = instructorAvailability; setInstructorAvailability(next); persist(syncAvailability(previous, next)) }
   const replaceEntries = (next: ScheduleEntry[]) => { const previous = scheduleEntries; setScheduleEntries(next); persist(syncEntries(previous, next)) }
   const replaceOpenings = (next: TrialOpening[]) => { const previous = trialOpenings; setTrialOpenings(next); persist(syncOpenings(previous, next, instructors)) }
   const deleteScheduleActivity = (id: string) => { setScheduleActivities((current) => current.filter((activity) => activity.id !== id)); persist(removeStoredScheduleActivity(id)) }
-  const addEsstHours = (instructorId: string, periodEndsOn: string, hoursWorked: number) => {
-    const entry: EsstHoursEntry = { id: crypto.randomUUID(), instructorId, periodEndsOn, hoursWorked }
-    const instructor = instructors.find((item) => item.id === instructorId)
-    queueReversible(
-      `esst-hours-${entry.id}`,
-      `Hours worked logged${instructor ? ` — ${instructor.name}` : ''}`,
-      () => { setEsstHoursEntries((current) => [...current, entry]); persist(saveEsstHoursEntry(entry)) },
-      () => { setEsstHoursEntries((current) => current.filter((item) => item.id !== entry.id)); persist(removeStoredEsstHoursEntry(entry.id)) },
-    )
-  }
-  const deleteEsstHours = (id: string) => { setEsstHoursEntries((current) => current.filter((item) => item.id !== id)); persist(removeStoredEsstHoursEntry(id)) }
-  const addEsstUsage = (instructorId: string, usedOn: string, hours: number) => {
-    const entry: EsstUsageEntry = { id: crypto.randomUUID(), instructorId, usedOn, hours }
-    const instructor = instructors.find((item) => item.id === instructorId)
-    queueReversible(
-      `esst-usage-${entry.id}`,
-      `Sick/safe time logged${instructor ? ` — ${instructor.name}` : ''}`,
-      () => { setEsstUsageEntries((current) => [...current, entry]); persist(saveEsstUsageEntry(entry)) },
-      () => { setEsstUsageEntries((current) => current.filter((item) => item.id !== entry.id)); persist(removeStoredEsstUsageEntry(entry.id)) },
-    )
-  }
-  const deleteEsstUsage = (id: string) => { setEsstUsageEntries((current) => current.filter((item) => item.id !== id)); persist(removeStoredEsstUsageEntry(id)) }
   const bookTrialOnSchedule = (lead: Lead, instructorId: string, startsAtIso: string, durationMinutes: 30 | 45 | 60 = 30): boolean => {
     const instructor = instructors.find((item) => item.id === instructorId)
     if (!instructor) { window.alert('Choose an instructor before scheduling the trial.'); return false }
@@ -961,7 +944,6 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
           <NavButton active={view === 'openings'} onClick={() => setView('openings')} icon="◫" label="Instructor schedule" />
           <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
-          <NavButton active={view === 'esst'} onClick={() => setView('esst')} icon="✚" label="Sick & safe time" />
           <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Settings" />
         </nav>
         <div className="sidebar-foot"><span className="avatar">CS</span><div>Conor<small>{isSupabaseConfigured ? 'Connected' : 'Demo mode'}</small></div>{onSignOut && <button className="sidebar-signout" onClick={onSignOut}>Sign out</button>}</div>
@@ -970,7 +952,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       <main className="content">
         {dataError && <div className="data-warning"><span>{dataError}</span><button onClick={() => setDataError('')}>×</button></div>}
         <header className="topbar">
-          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'openings' ? 'Instructor schedule' : view === 'activity' ? 'Activity log' : view === 'esst' ? 'Sick & safe time' : 'Settings'}</h1></div>
+          <div><p className="eyebrow">{formatDate(new Date(), false)}</p><h1>{view === 'today' ? 'Your follow-up plan' : view === 'leads' ? 'All leads' : view === 'openings' ? 'Instructor schedule' : view === 'activity' ? 'Activity log' : 'Settings'}</h1></div>
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
@@ -978,8 +960,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
-        {view === 'esst' && <Esst instructors={instructors} hoursEntries={esstHoursEntries} usageEntries={esstUsageEntries} onAddHours={addEsstHours} onDeleteHours={deleteEsstHours} onAddUsage={addEsstUsage} onDeleteUsage={deleteEsstUsage} />}
-        {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
+        {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onUpdateInstructor={updateInstructor} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
       </main>
 
       {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} onResumeCadenceNow={resumeCadenceNow} onLogReply={logReply} onMoveCadence={moveCadence} />}
@@ -1948,119 +1929,7 @@ function CadenceInsertModal({ leads, instruments, instructors, onClose, onSave, 
   </section></div>
 }
 
-function Esst({ instructors, hoursEntries, usageEntries, onAddHours, onDeleteHours, onAddUsage, onDeleteUsage }: {
-  instructors: Instructor[]
-  hoursEntries: EsstHoursEntry[]
-  usageEntries: EsstUsageEntry[]
-  onAddHours: (instructorId: string, periodEndsOn: string, hoursWorked: number) => void
-  onDeleteHours: (id: string) => void
-  onAddUsage: (instructorId: string, usedOn: string, hours: number) => void
-  onDeleteUsage: (id: string) => void
-}) {
-  const eligible = instructors.filter((item) => item.esstEligible ?? true)
-  const [periodEndsOn, setPeriodEndsOn] = useState(() => localDateKey(new Date()))
-  const [hoursDraft, setHoursDraft] = useState<Record<string, string>>({})
-  const [usageFor, setUsageFor] = useState<Instructor | null>(null)
-  const [historyFor, setHistoryFor] = useState<Instructor | null>(null)
-
-  const savePeriod = () => {
-    const drafted = eligible.flatMap((instructor) => {
-      const raw = hoursDraft[instructor.id]
-      if (raw === undefined || raw.trim() === '') return []
-      const hours = Number(raw)
-      if (!Number.isFinite(hours) || hours < 0) return []
-      return [{ instructor, hours }]
-    })
-    if (!drafted.length) { window.alert('Enter hours worked for at least one employee.'); return }
-    drafted.forEach(({ instructor, hours }) => onAddHours(instructor.id, periodEndsOn, hours))
-    setHoursDraft({})
-  }
-
-  return <>
-    <section className="card esst-period-card">
-      <div className="section-head"><div><h2>Add this pay period's hours</h2><p>Accrual is calculated automatically at 1 hour per {ESST_ACCRUAL_DIVISOR} worked, capped at an {ESST_BALANCE_CAP}-hour balance.</p></div></div>
-      <label className="field esst-period-date">Pay period end date<input type="date" max={localDateKey(new Date())} value={periodEndsOn} onChange={(event) => setPeriodEndsOn(event.target.value)} /></label>
-      <div className="esst-hours-grid">
-        {eligible.map((instructor) => <label key={instructor.id} className="esst-hours-row"><span>{instructor.name}</span><input type="number" min={0} placeholder="Hours worked" value={hoursDraft[instructor.id] ?? ''} onChange={(event) => setHoursDraft((current) => ({ ...current, [instructor.id]: event.target.value }))} /></label>)}
-        {!eligible.length && <p className="muted">No ESST-eligible employees yet. Mark instructors eligible in Settings → Instructor roster.</p>}
-      </div>
-      {Boolean(eligible.length) && <button className="primary" onClick={savePeriod}>Save this pay period</button>}
-    </section>
-
-    <section className="card esst-balances-card">
-      <div className="section-head"><div><h2>Balances</h2><p>Accrued-to-date, used-to-date, and current available balance (capped at {ESST_BALANCE_CAP} hrs).</p></div></div>
-      <div className="esst-balance-list">
-        {eligible.map((instructor) => {
-          const summary = esstSummaryFor(instructor.id, hoursEntries, usageEntries)
-          return <article key={instructor.id} className="esst-balance-row">
-            <div className="esst-balance-name"><strong>{instructor.name}</strong>{summary.balance >= ESST_BALANCE_CAP && <small className="esst-capped">At cap — accrual paused</small>}</div>
-            <div className="esst-balance-figures">
-              <span><b>{summary.accrued.toFixed(2)}</b>Accrued</span>
-              <span><b>{summary.used.toFixed(2)}</b>Used</span>
-              <span className="esst-balance-available"><b>{summary.balance.toFixed(2)}</b>Available</span>
-            </div>
-            <div className="row-actions">
-              <button onClick={() => setUsageFor(instructor)}>＋ Log time used</button>
-              <button className="secondary" onClick={() => setHistoryFor(instructor)}>History</button>
-            </div>
-          </article>
-        })}
-        {!eligible.length && <div className="today-complete"><strong>No ESST-eligible employees</strong><span>Mark instructors eligible in Settings to start tracking.</span></div>}
-      </div>
-    </section>
-
-    {usageFor && <EsstUsageModal instructor={usageFor} onClose={() => setUsageFor(null)} onSave={(usedOn, hours) => { onAddUsage(usageFor.id, usedOn, hours); setUsageFor(null) }} />}
-    {historyFor && <EsstHistoryModal instructor={historyFor} hoursEntries={hoursEntries.filter((entry) => entry.instructorId === historyFor.id)} usageEntries={usageEntries.filter((entry) => entry.instructorId === historyFor.id)} onClose={() => setHistoryFor(null)} onDeleteHours={onDeleteHours} onDeleteUsage={onDeleteUsage} />}
-  </>
-}
-
-function EsstUsageModal({ instructor, onClose, onSave }: { instructor: Instructor; onClose: () => void; onSave: (usedOn: string, hours: number) => void }) {
-  const [usedOn, setUsedOn] = useState(() => localDateKey(new Date()))
-  const [hours, setHours] = useState('')
-  const parsed = Number(hours)
-  const valid = hours.trim() !== '' && Number.isFinite(parsed) && parsed > 0
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <form className="modal" onSubmit={(event) => { event.preventDefault(); if (!valid) return; onSave(usedOn, parsed) }}>
-      <button type="button" className="close" onClick={onClose}>×</button>
-      <p className="eyebrow">{instructor.name}</p>
-      <h2>Log sick/safe time used</h2>
-      <label className="field">Date<input required type="date" max={localDateKey(new Date())} value={usedOn} onChange={(event) => setUsedOn(event.target.value)} /></label>
-      <label className="field">Hours<input required type="number" min={0.25} step={0.25} value={hours} onChange={(event) => setHours(event.target.value)} placeholder="e.g. 4" /></label>
-      <div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button className="primary" type="submit" disabled={!valid}>Save</button></div>
-    </form>
-  </div>
-}
-
-function EsstHistoryModal({ instructor, hoursEntries, usageEntries, onClose, onDeleteHours, onDeleteUsage }: {
-  instructor: Instructor
-  hoursEntries: EsstHoursEntry[]
-  usageEntries: EsstUsageEntry[]
-  onClose: () => void
-  onDeleteHours: (id: string) => void
-  onDeleteUsage: (id: string) => void
-}) {
-  const rows = [
-    ...hoursEntries.map((entry) => ({ id: entry.id, at: entry.periodEndsOn, label: `Worked ${entry.hoursWorked} hrs this period`, detail: `+${(entry.hoursWorked / ESST_ACCRUAL_DIVISOR).toFixed(2)} hrs accrued (before cap)`, onDelete: () => onDeleteHours(entry.id) })),
-    ...usageEntries.map((entry) => ({ id: entry.id, at: entry.usedOn, label: `Used ${entry.hours} hrs`, detail: '', onDelete: () => onDeleteUsage(entry.id) })),
-  ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
-
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <div className="modal esst-history-modal">
-      <button type="button" className="close" onClick={onClose}>×</button>
-      <p className="eyebrow">{instructor.name}</p>
-      <h2>ESST history</h2>
-      <div className="esst-history-list">
-        {rows.map((row) => <article key={row.id} className="esst-history-row">
-          <div><strong>{formatDate(new Date(`${row.at}T00:00:00`))}</strong><span>{row.label}</span>{row.detail && <small>{row.detail}</small>}</div>
-          <button className="remove-instructor" title="Delete this entry" onClick={() => { if (window.confirm('Delete this entry? This cannot be undone.')) row.onDelete() }}>×</button>
-        </article>)}
-        {!rows.length && <p className="muted">No entries yet.</p>}
-      </div>
-    </div>
-  </div>
-}
-
-function Settings({ instruments, leads, instructors, availability, entries, openings, messageTemplates, onInstrumentsChange, onInstructorsChange, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onRequestSignatures, onSaveTemplate, onResetTemplate }: {
+function Settings({ instruments, leads, instructors, availability, entries, openings, messageTemplates, onInstrumentsChange, onInstructorsChange, onUpdateInstructor, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onRequestSignatures, onSaveTemplate, onResetTemplate }: {
   instruments: string[]
   leads: Lead[]
   instructors: Instructor[]
@@ -2070,6 +1939,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
   messageTemplates: Record<string, string>
   onInstrumentsChange: (value: string[]) => void
   onInstructorsChange: (value: Instructor[]) => void
+  onUpdateInstructor: (id: string, patch: { name: string; instruments: string[] }) => void
   onAvailabilityChange: (value: InstructorAvailability[]) => void
   onEntriesChange: (value: ScheduleEntry[]) => void
   onOpeningsChange: (value: TrialOpening[]) => void
@@ -2111,10 +1981,6 @@ function Settings({ instruments, leads, instructors, availability, entries, open
     onScheduleLog({ action: 'Instructor added', instructor: name, details: newInstructorInstruments.join(' / ') })
   }
 
-  const toggleEsstEligible = (item: Instructor) => {
-    onInstructorsChange(instructors.map((instructor) => instructor.id === item.id ? { ...instructor, esstEligible: !(instructor.esstEligible ?? true) } : instructor))
-  }
-
   const removeInstructor = (item: Instructor) => {
     if (!window.confirm(`Remove ${item.name}? Their availability, scheduled lessons, and trial openings will also be removed.`)) return
     onInstructorsChange(instructors.filter((instructor) => instructor.id !== item.id))
@@ -2124,18 +1990,21 @@ function Settings({ instruments, leads, instructors, availability, entries, open
     onScheduleLog({ action: 'Instructor removed', instructor: item.name, details: `${item.instruments.join(' / ')} · Schedule data removed` })
   }
 
-  const saveInstructorInstruments = (item: Instructor, nextInstruments: string[]) => {
-    if (!nextInstruments.length) { window.alert('Select at least one instrument.'); return }
-    const previous = item.instruments.join(' / ')
-    onInstructorsChange(instructors.map((instructor) => instructor.id === item.id ? { ...item, instruments: nextInstruments } : instructor))
-    onOpeningsChange(openings.map((opening) => opening.instructor === item.name ? { ...opening, instruments: nextInstruments } : opening))
-    onScheduleLog({ action: 'Instructor instruments updated', instructor: item.name, details: `${previous} → ${nextInstruments.join(' / ')}` })
+  const saveInstructor = (item: Instructor, next: { name: string; instruments: string[] }) => {
+    const name = next.name.trim()
+    if (!name) { window.alert('The instructor needs a name.'); return }
+    if (!next.instruments.length) { window.alert('Select at least one instrument.'); return }
+    if (instructors.some((instructor) => instructor.id !== item.id && instructor.name.toLowerCase() === name.toLowerCase())) { window.alert('Another instructor already has that name.'); return }
+    const instrumentsChanged = item.instruments.join(',') !== next.instruments.join(',')
+    onUpdateInstructor(item.id, { name, instruments: next.instruments })
+    if (name !== item.name) onScheduleLog({ action: 'Instructor renamed', instructor: name, details: `${item.name} → ${name}` })
+    if (instrumentsChanged) onScheduleLog({ action: 'Instructor instruments updated', instructor: name, details: `${item.instruments.join(' / ')} → ${next.instruments.join(' / ')}` })
     setEditingInstructor(null)
   }
 
   return <><section className="settings-grid">
     <div className="card setting-card settings-wide"><h2>Instruments offered</h2><p>This list controls the instrument choices used throughout the lead manager.</p><form className="settings-add-row" onSubmit={(event) => { event.preventDefault(); addInstrument() }}><input value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)} placeholder="Add an instrument" /><button className="primary" type="submit" disabled={!newInstrument.trim()}>＋ Add</button></form><div className="settings-item-list">{instruments.map((instrument) => { const used = instrumentIsUsed(instrument); return <span key={instrument}><b>{instrument}</b>{used && <small>In use</small>}<button disabled={used} title={used ? `${instrument} is currently in use` : `Remove ${instrument}`} onClick={() => removeInstrument(instrument)}>×</button></span> })}</div></div>
-    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : ''}</small></div><label className="esst-eligible-toggle"><input type="checkbox" checked={item.esstEligible ?? true} onChange={() => toggleEsstEligible(item)} /> ESST eligible</label><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
+    <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{instruments.map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{item.instruments.join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : ''}</small></div><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
     <div className="card setting-card"><h2>Contact availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Thursday</span><strong>4:30–5:30 PM</strong></div><div className="schedule-row"><span>Friday</span><strong>4:00–5:15 PM</strong></div><div className="schedule-row"><span>Saturday</span><strong>10:00 AM–12:00 PM</strong></div><div className="schedule-row"><span>Sunday</span><strong>1:00–3:00 PM</strong></div><div className="blackout"><strong>Note</strong><span>Sunday is hot leads only — nurture contacts wait until Monday.</span><span>A brand-new lead is contacted immediately, any day, regardless of these windows.</span></div><button className="secondary">Edit availability</button></div>
     <div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div>
     <div className="card setting-card"><h2>Enrollment agreement</h2><p>Track signature collection for every active student. Use this after a terms update to have everyone re-sign.</p><button className="secondary full" onClick={onRequestSignatures}>⚠ Major update to terms — collect signatures from all students</button><small className="muted" style={{ display: 'block', marginTop: 10 }}>This adds every current active student to Action Pending until their signature is collected. Inactive or unenrolled leads are never included.</small></div>
@@ -2147,7 +2016,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
       <h3>{group.title}</h3>
       {group.items.map((item) => <MessageTemplateEditor key={item.key} template={item} value={messageTemplates[item.key] ?? defaultMessageTemplates[item.key]} onSave={(value) => onSaveTemplate(item.key, value)} onReset={() => onResetTemplate(item.key)} />)}
     </div>)}
-  </section>{editingInstructor && <InstructorEditor instrumentOptions={instruments} instructor={editingInstructor} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(nextInstruments) => saveInstructorInstruments(editingInstructor, nextInstruments)} />}</>
+  </section>{editingInstructor && <InstructorEditor instrumentOptions={instruments} instructor={editingInstructor} lockedInstruments={Array.from(new Set(entries.filter((entry) => entry.instructorId === editingInstructor.id).map((entry) => entry.instrument)))} onClose={() => setEditingInstructor(null)} onSave={(next) => saveInstructor(editingInstructor, next)} />}</>
 }
 
 function MessageTemplateEditor({ template, value, onSave, onReset }: { template: { key: string; label: string; variables: string[] }; value: string; onSave: (value: string) => void; onReset: () => void }) {
@@ -2498,8 +2367,9 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   onAcuitySync: (instructorId: string, startsAtIso: string, isNowBookable: boolean) => Promise<{ ok: true } | { ok: false; conflict: boolean; message: string }>
 }) {
   const toggleBusy = useRef(false)
-  const [instructorId, setInstructorId] = useState(instructors[0]?.id ?? '')
-  const instructor = instructors.find((item) => item.id === instructorId) ?? instructors[0]
+  const sortedInstructors = [...instructors].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  const [instructorId, setInstructorId] = useState(sortedInstructors[0]?.id ?? '')
+  const instructor = instructors.find((item) => item.id === instructorId) ?? sortedInstructors[0]
   const [weekStart, setWeekStart] = useState(() => startOfScheduleWeek(new Date()))
   const [availabilityDay, setAvailabilityDay] = useState(1)
   const [availabilityStart, setAvailabilityStart] = useState('16:30')
@@ -2510,7 +2380,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   const [removeChoice, setRemoveChoice] = useState<{ entry: ScheduleEntry; date: Date } | null>(null)
   const [hoveredTime, setHoveredTime] = useState<string | null>(null)
   useEffect(() => {
-    if (!instructors.some((item) => item.id === instructorId)) setInstructorId(instructors[0]?.id ?? '')
+    if (!instructors.some((item) => item.id === instructorId)) setInstructorId(sortedInstructors[0]?.id ?? '')
   }, [instructors, instructorId])
 
   if (!instructor) return <section className="card empty-instructors"><h2>No instructors yet</h2><p>Add your first instructor from Settings, then their schedule will appear here.</p></section>
@@ -2691,7 +2561,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
 
   return <section className="schedule-page">
     <div className="card schedule-toolbar">
-      <label>Instructor<select value={instructor.id} onChange={(event) => changeInstructor(event.target.value)}>{instructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <label>Instructor<select value={instructor.id} onChange={(event) => changeInstructor(event.target.value)}>{sortedInstructors.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
       <div className="week-switcher"><button onClick={() => setWeekStart(datePlusDays(weekStart, -7))}>←</button><strong>{weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{datePlusDays(weekStart, 5).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</strong><button onClick={() => setWeekStart(datePlusDays(weekStart, 7))}>→</button></div>
     </div>
 
@@ -2754,14 +2624,15 @@ function InstructorEditor({ instrumentOptions, instructor, lockedInstruments, on
   instructor: Instructor
   lockedInstruments: string[]
   onClose: () => void
-  onSave: (instruments: string[]) => void
+  onSave: (next: { name: string; instruments: string[] }) => void
 }) {
+  const [name, setName] = useState(instructor.name)
   const [selected, setSelected] = useState(instructor.instruments)
   const toggle = (instrument: string, checked: boolean) => setSelected((current) => checked ? Array.from(new Set([...current, instrument])) : current.filter((item) => item !== instrument))
-  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal instructor-editor" onSubmit={(event) => { event.preventDefault(); onSave(selected) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Edit instructor</p><h2>{instructor.name}</h2><p className="muted">Choose every instrument this instructor can teach. Their availability and scheduled lessons will stay exactly as they are.</p><div className="instrument-checks editor-instrument-checks">{instrumentOptions.map((instrument) => {
+  return <div className="overlay modal-overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal instructor-editor" onSubmit={(event) => { event.preventDefault(); onSave({ name, instruments: selected }) }}><button type="button" className="close" onClick={onClose}>×</button><p className="eyebrow">Edit instructor</p><h2>{instructor.name}</h2><label className="field">Name<input required value={name} onChange={(event) => setName(event.target.value)} /></label><p className="muted">Choose every instrument this instructor can teach. Their availability and scheduled lessons will stay exactly as they are.</p><div className="instrument-checks editor-instrument-checks">{instrumentOptions.map((instrument) => {
     const locked = lockedInstruments.includes(instrument)
     return <label className={locked ? 'locked-instrument' : ''} key={instrument}><input type="checkbox" checked={selected.includes(instrument)} disabled={locked} onChange={(event) => toggle(instrument, event.target.checked)} /> <span>{instrument}{locked && <small>Scheduled</small>}</span></label>
-  })}</div><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!selected.length}>Save instruments</button></div></form></div>
+  })}</div><div className="editor-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!selected.length || !name.trim()}>Save changes</button></div></form></div>
 }
 
 function ScheduleEntryEditor({ leads, instructor, slot, onClose, onSave, onDelete, onSkipDate }: {
