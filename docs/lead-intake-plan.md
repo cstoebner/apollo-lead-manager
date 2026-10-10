@@ -32,7 +32,8 @@ Apps Script sends from Conor's Gmail.
 - **Idempotency:** `inbound_leads.external_id` is unique (Meta lead id / Gmail message id); retries are harmless.
 - **Cadence:** a sent email is logged as an `email` activity and does not advance the call/text cadence.
 - **Text opt-in:** if the form's text-message consent question is unanswered or not a yes, `leads.sms_opt_out` is set.
-  Those leads stay in the initial outreach (Day 0–8) but are excluded from the nurture campaign. A form with no
+  Those leads stay in the initial outreach (Day 0–8) but are excluded from the nurture campaign; when their
+  outreach finishes with no trial booked they move to Unresponsive automatically. A form with no
   consent question (the website form) is treated as eligible.
 - The Day 0 text/call still happen manually.
 

@@ -739,6 +739,19 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     persist(Promise.all([updateLead(id, { status }), saveActivity(id, activity)]))
     if (status === 'unenrolled') setUnenrollPromptId(id)
   }
+  // A lead who didn't opt in to texts can't enter the nurture campaign, so when their initial outreach (Day 0-8) is
+  // finished with no trial booked they go straight to Unresponsive instead of waiting for a status prompt.
+  const autoClosedOptOuts = useRef(new Set<string>())
+  useEffect(() => {
+    if (loadingData) return
+    for (const lead of leads) {
+      if (!lead.smsOptOut || lead.status !== 'hot' || lead.trialAt || lead.followUpAt || isCadencePaused(lead) || autoClosedOptOuts.current.has(lead.id) || !activeCadenceState(lead).complete) continue
+      autoClosedOptOuts.current.add(lead.id)
+      const activity: Activity = { id: crypto.randomUUID(), type: 'status_change', occurredAt: new Date().toISOString(), outcome: "Initial outreach finished with no response — moved to Unresponsive (didn't opt in to texts, so no nurture campaign)" }
+      setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, status: 'unresponsive', activities: [...item.activities, activity] } : item))
+      persist(Promise.all([updateLead(lead.id, { status: 'unresponsive' }), saveActivity(lead.id, activity)]))
+    }
+  }, [leads, loadingData])
   const updateTrial = (id: string, update: Partial<Lead>, outcome: string) => {
     const activity: Activity = { id: crypto.randomUUID(), type: 'trial_update', occurredAt: new Date().toISOString(), outcome }
     setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, ...update, activities: [...lead.activities, activity] } : lead))
@@ -1316,7 +1329,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
       items.push({ lead, reason: 'enrollment_agreement', action: 'Enrollment agreement signed?' })
     } else if (lead.status === 'action_pending') {
       items.push({ lead, reason: 'manual', action: 'Manual follow-up needed' })
-    } else if (lead.status === 'hot' && !lead.trialAt && !lead.followUpAt && !isCadencePaused(lead) && activeCadenceState(lead).complete) {
+    } else if (lead.status === 'hot' && !lead.trialAt && !lead.followUpAt && !isCadencePaused(lead) && !lead.smsOptOut && activeCadenceState(lead).complete) {
       items.push({ lead, reason: 'cadence_complete', action: 'Went through the initial outreach period — update their status?' })
     }
     return items
