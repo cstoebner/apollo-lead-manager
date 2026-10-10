@@ -1496,7 +1496,7 @@ function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction, onRefre
           <small>To {email.toEmail} · {email.subject}</small>
           <small>{email.proposedTimes.length ? `Offering ${email.proposedTimes.map((time) => `${time.label} with ${time.instructor}`).join(' and ')}` : 'No openings to offer — booking link only'}</small>
           {email.error && <small className="email-error">{email.error}</small>}
-          {previewId === email.id && <iframe className="email-preview" title={`Preview of the email to ${leadName(email.leadId)}`} sandbox="" srcDoc={email.htmlBody.replace('cid:apollo-logo', '/email/apollo-logo.png')} />}
+          {previewId === email.id && <iframe className="email-preview" title={`Preview of the email to ${leadName(email.leadId)}`} sandbox="" srcDoc={email.htmlBody.replace('cid:apollo-logo', '/email/apollo-logo.jpg')} />}
         </span></div>
         <div className="row-actions">
           <button onClick={() => { const opening = previewId !== email.id; setPreviewId(opening ? email.id : null); if (opening) onRefresh(email) }}>{previewId === email.id ? 'Hide' : 'Preview'}</button>

@@ -235,7 +235,7 @@ function apolloSendQueuedEmails_() {
         // The logo is attached to the message itself (not linked from a website), so mail apps have no
         // "load remote content" prompt to show.
         if (String(email.html).indexOf('cid:apollo-logo') !== -1) {
-          options.inlineImages = { 'apollo-logo': UrlFetchApp.fetch(APOLLO_BASE_URL + '/email/apollo-logo.png').getBlob().setName('apollo-logo.png') };
+          options.inlineImages = { 'apollo-logo': UrlFetchApp.fetch(APOLLO_BASE_URL + '/email/apollo-logo.jpg').getBlob().setName('apollo-logo.jpg') };
         }
         GmailApp.sendEmail(email.to, email.subject, email.text, options);
         sentIds.push(email.id);

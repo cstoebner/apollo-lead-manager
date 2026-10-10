@@ -262,9 +262,9 @@ function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
       const secondary = times.length > 0
       const label = secondary ? 'See all open times' : 'Book my free trial now'
       const style = secondary
-        ? `display:inline-block;padding:12px 28px;font-family:${BODY_FONT};font-size:15px;font-weight:700;color:${BRAND.blue};text-decoration:none;border:2px solid ${BRAND.blue};border-radius:26px;`
-        : `display:inline-block;padding:15px 34px;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:26px;`
-      return `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:6px auto 4px;"><tr><td align="center" bgcolor="${secondary ? '#ffffff' : BRAND.blue}" style="background:${secondary ? '#ffffff' : BRAND.blue};border-radius:26px;"><a href="${escapeHtml(bookingLink)}" style="${style}">${label}</a></td></tr></table>`
+        ? `display:inline-block;font-family:${BODY_FONT};font-size:15px;font-weight:700;color:${BRAND.blue};text-decoration:none;`
+        : `display:inline-block;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;`
+      return `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:6px auto 4px;"><tr><td align="center" bgcolor="${secondary ? '#ffffff' : BRAND.blue}" style="background:${secondary ? '#ffffff' : BRAND.blue};border-radius:26px;${secondary ? `border:2px solid ${BRAND.blue};padding:11px 28px;` : 'padding:15px 34px;'}"><a href="${escapeHtml(bookingLink)}" style="${style}">${label}</a></td></tr></table>`
         + `<p style="margin:12px 0 28px;text-align:center;font-family:${BODY_FONT};font-size:13px;color:${BRAND.slate};">apollo-music-academy-booking.as.me</p>`
     }
     const lines = trimmed.split('\n')
@@ -273,7 +273,7 @@ function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
       const rows = lines.map((line, row) => {
         const label = escapeHtml(line.trim().replace(/^[0-9]\uFE0F?\u20E3\s*/, ''))
         const link = times[row]?.link ?? bookingLink
-        return `<tr><td style="padding:5px 0;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center" bgcolor="${BRAND.blue}" style="background:${BRAND.blue};border-radius:14px;"><a href="${escapeHtml(link)}" style="display:block;padding:15px 18px;font-family:${BODY_FONT};font-size:16px;font-weight:700;line-height:1.35;color:#ffffff;text-decoration:none;border-radius:14px;">${label}</a></td></tr></table></td></tr>`
+        return `<tr><td style="padding:5px 0;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center" bgcolor="${BRAND.blue}" style="background:${BRAND.blue};border-radius:14px;padding:15px 18px;"><a href="${escapeHtml(link)}" style="display:block;font-family:${BODY_FONT};font-size:16px;font-weight:700;line-height:1.35;color:#ffffff;text-decoration:none;">${label}</a></td></tr></table></td></tr>`
       }).join('')
       return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:4px 0 18px;">${rows}</table>`
     }
@@ -287,11 +287,14 @@ function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
     + `<body style="margin:0;padding:0;background:${BRAND.page};">`
     + `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Your free trial lesson at Apollo Music Academy: pick a time or book right now.</div>`
     + `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${BRAND.page};"><tr><td align="center" style="padding:24px 12px;">`
+    + `<!--[if mso]><table role="presentation" cellpadding="0" cellspacing="0" width="580" align="center"><tr><td><![endif]-->`
     + `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:580px;background:#ffffff;border-radius:16px;overflow:hidden;">`
     + `<tr><td align="center" bgcolor="${BRAND.cream}" style="background:${BRAND.cream};padding:26px 24px 22px;border-bottom:4px solid ${BRAND.gold};"><img src="cid:apollo-logo" width="260" alt="Apollo Music Academy" style="display:block;width:260px;max-width:100%;height:auto;border:0;"></td></tr>`
     + `<tr><td style="padding:30px 34px 14px;">${blocks.join('')}</td></tr>`
     + `<tr><td align="center" bgcolor="${BRAND.cream}" style="background:${BRAND.cream};padding:18px 24px;font-family:${BODY_FONT};font-size:12.5px;color:${BRAND.slate};">Apollo Music Academy &middot; Free trial lessons in Chaska, MN</td></tr>`
-    + `</table></td></tr></table></body></html>`
+    + `</table>`
+    + `<!--[if mso]></td></tr></table><![endif]-->`
+    + `</td></tr></table></body></html>`
 }
 
 // The studio's own Acuity booking page. `appointmentType` opens it on that instrument's free-trial lesson so the
