@@ -3,7 +3,7 @@ import type { AcuityAppointment, AcuityAppointmentType, AcuityBlock, AcuityCalen
 const BASE_URL = 'https://acuityscheduling.com/api/v1'
 
 class AcuityApiError extends Error {
-  constructor(method: string, path: string, status: number, body: string) {
+  constructor(method: string, path: string, readonly status: number, body: string) {
     super(`Acuity ${method} ${path} failed: ${status} ${body}`)
   }
 }
@@ -33,7 +33,11 @@ export function liveAcuityClient(userId: string, apiKey: string): AcuityClient {
     },
     listBlocks: (calendarID) => request<AcuityBlock[]>('GET', `/blocks?calendarID=${encodeURIComponent(calendarID)}`),
     createBlock: (input) => request<AcuityBlock>('POST', '/blocks', input),
-    deleteBlock: async (id) => { await request<void>('DELETE', `/blocks/${id}`) },
+    // A block that's already gone from Acuity (deleted by hand, or by an earlier half-finished run) is the state
+    // we wanted anyway, so a 404 is success -- otherwise one stale row would stop every later cleanup.
+    deleteBlock: async (id) => {
+      try { await request<void>('DELETE', `/blocks/${id}`) } catch (error) { if (!(error instanceof AcuityApiError && error.status === 404)) throw error }
+    },
     registerWebhook: (input) => request<{ id: string }>('POST', '/webhooks', input),
   }
 }
