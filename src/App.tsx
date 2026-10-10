@@ -2009,7 +2009,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
   return <><section className="settings-grid">
     <div className="card setting-card settings-wide"><h2>Instruments offered</h2><p>This list controls the instrument choices used throughout the lead manager.</p><form className="settings-add-row" onSubmit={(event) => { event.preventDefault(); addInstrument() }}><input value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)} placeholder="Add an instrument" /><button className="primary" type="submit" disabled={!newInstrument.trim()}>＋ Add</button></form><div className="settings-item-list">{instruments.map((instrument) => { const used = instrumentIsUsed(instrument); return <span key={instrument}><b>{instrument}</b>{used && <small>In use</small>}<button disabled={used} title={used ? `${instrument} is currently in use` : `Remove ${instrument}`} onClick={() => removeInstrument(instrument)}>×</button></span> })}</div></div>
     <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{alphabetical(instruments).map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{alphabetical(item.instruments).join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : isSupabaseConfigured ? ' · Not linked to Acuity' : ''}</small></div><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
-    {isSupabaseConfigured && <AcuitySyncCard />}
+    {isSupabaseConfigured && <AcuitySyncCard instructors={instructors} />}
     <div className="card setting-card"><h2>Contact availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Thursday</span><strong>4:30–5:30 PM</strong></div><div className="schedule-row"><span>Friday</span><strong>4:00–5:15 PM</strong></div><div className="schedule-row"><span>Saturday</span><strong>10:00 AM–12:00 PM</strong></div><div className="schedule-row"><span>Sunday</span><strong>1:00–3:00 PM</strong></div><div className="blackout"><strong>Note</strong><span>Sunday is hot leads only — nurture contacts wait until Monday.</span><span>A brand-new lead is contacted immediately, any day, regardless of these windows.</span></div><button className="secondary">Edit availability</button></div>
     <div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div>
     <div className="card setting-card"><h2>Enrollment agreement</h2><p>Track signature collection for every active student. Use this after a terms update to have everyone re-sign.</p><button className="secondary full" onClick={onRequestSignatures}>⚠ Major update to terms — collect signatures from all students</button><small className="muted" style={{ display: 'block', marginTop: 10 }}>This adds every current active student to Action Pending until their signature is collected. Inactive or unenrolled leads are never included.</small></div>
@@ -2630,25 +2630,31 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
   </section>
 }
 
-type SyncSummary = Record<string, { created: number; removed: number; recoveredBookings: number } | { error: string }>
+type SyncLine = { name: string; text: string; failed?: boolean }
 
 // Runs the same job as the nightly Acuity reconciliation, on demand -- for when blocks look wrong, or right
-// after linking an instructor or flagging a batch of openings.
-function AcuitySyncCard() {
+// after linking an instructor or flagging a batch of openings. One request per instructor (each server call has
+// a cap on how much it can do), so a failure on one calendar doesn't stop the others.
+function AcuitySyncCard({ instructors }: { instructors: Instructor[] }) {
   const [running, setRunning] = useState(false)
-  const [error, setError] = useState('')
-  const [result, setResult] = useState<{ at: Date; summary: SyncSummary } | null>(null)
+  const [result, setResult] = useState<{ at: Date; lines: SyncLine[] } | null>(null)
+  const linked = instructors.filter((item) => item.acuityCalendarId).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
   const run = async () => {
-    setRunning(true); setError('')
-    try {
-      const { summary } = await callApi<{ ok: boolean; summary: SyncSummary }>('/api/acuity-reconcile', {})
-      setResult({ at: new Date(), summary })
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Sync failed.')
-    } finally { setRunning(false) }
+    setRunning(true); setResult(null)
+    const lines: SyncLine[] = []
+    for (const instructor of linked) {
+      try {
+        const done = await callApi<{ created: number; removed: number; recoveredBookings: number; partial?: boolean }>('/api/acuity-reconcile', { instructorId: instructor.id })
+        const text = `${done.created} block${done.created === 1 ? '' : 's'} added · ${done.removed} removed${done.recoveredBookings ? ` · ${done.recoveredBookings} missed booking${done.recoveredBookings === 1 ? '' : 's'} recovered` : ''}${done.partial ? ' · more to do — click Sync again' : ''}`
+        lines.push({ name: instructor.name, text, failed: Boolean(done.partial) })
+      } catch (caught) {
+        lines.push({ name: instructor.name, text: `Failed: ${caught instanceof Error ? caught.message : 'sync failed.'}`, failed: true })
+      }
+      setResult({ at: new Date(), lines: [...lines] })
+    }
+    setRunning(false)
   }
-  const lines = result ? Object.entries(result.summary) : []
-  return <div className="card setting-card"><h2>Acuity sync</h2><p>Re-blocks every linked instructor's Acuity calendar so only flagged trial openings (and active holds) can be booked. This also runs automatically every night; use it if blocks ever look wrong.</p><button className="secondary" disabled={running} onClick={() => void run()}>{running ? 'Syncing…' : '↻ Sync Acuity now'}</button>{error && <p className="auth-error">{error}</p>}{result && <div className="settings-instructor-list"><small>Finished {result.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}{lines.length ? '' : ' — no instructors are linked to Acuity yet.'}</small>{lines.map(([name, item]) => <article key={name}><div><b>{name}</b><small>{'error' in item ? `Failed: ${item.error}` : `${item.created} block${item.created === 1 ? '' : 's'} added · ${item.removed} removed${item.recoveredBookings ? ` · ${item.recoveredBookings} missed booking${item.recoveredBookings === 1 ? '' : 's'} recovered` : ''}`}</small></div></article>)}</div>}</div>
+  return <div className="card setting-card"><h2>Acuity sync</h2><p>Re-blocks every linked instructor's Acuity calendar so only flagged trial openings (and active holds) can be booked. This also runs automatically every night; use it if blocks ever look wrong.</p><button className="secondary" disabled={running || !linked.length} onClick={() => void run()}>{running ? 'Syncing…' : '↻ Sync Acuity now'}</button>{!linked.length && <small>No instructors are linked to Acuity yet.</small>}{result && <div className="settings-instructor-list"><small>{running ? 'Working…' : `Finished ${result.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}</small>{result.lines.map((line) => <article key={line.name}><div><b>{line.name}</b><small>{line.text}</small></div></article>)}</div>}</div>
 }
 
 function InstructorEditor({ instrumentOptions, instructor, lockedInstruments, calendarsInUse, onClose, onSave }: {
