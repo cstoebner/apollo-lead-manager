@@ -21,4 +21,8 @@ export interface Env {
   // Shared secret the companion cron Worker sends on every scheduled call, so
   // the two /api/cron/* routes can't be triggered by a stranger who finds the URL.
   CRON_SECRET: string
+
+  // Shared secret the Gmail/Sheets Apps Script sends on every call to /api/inbound/*, so only that script
+  // can create leads or drain the email queue.
+  INTAKE_SECRET: string
 }

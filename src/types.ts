@@ -138,3 +138,39 @@ export interface FeeCharge {
   waivedReason?: string
   createdAt: string
 }
+
+export interface IntakeParsed {
+  name: string
+  studentName?: string
+  email: string
+  phone: string
+  instruments: string[]
+  source: string
+  campaign: string
+  receivedAt: string
+  notes: string[]
+}
+
+export interface InboundLead {
+  id: string
+  source: 'meta' | 'formspree'
+  receivedAt: string
+  parsed: IntakeParsed
+  status: 'created' | 'needs_review' | 'merged' | 'failed' | 'dismissed'
+  matchedLeadId?: string
+  matchReason?: string
+  note?: string
+  createdAt: string
+}
+
+export interface OutboundEmail {
+  id: string
+  leadId: string
+  toEmail: string
+  subject: string
+  textBody: string
+  status: 'draft' | 'queued' | 'sending' | 'sent' | 'failed' | 'discarded'
+  error?: string
+  proposedTimes: { startsAt: string; label: string; instructor: string }[]
+  createdAt: string
+}

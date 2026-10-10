@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { AcuityEvent, Activity, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, ScheduleActivity, ScheduleEntry, TrialOpening } from './types'
+import type { AcuityEvent, Activity, FeeCharge, Hold, InboundLead, Instructor, InstructorAvailability, Lead, OutboundEmail, ScheduleActivity, ScheduleEntry, TrialOpening } from './types'
 
 export interface WorkspaceData {
   leads: Lead[]
@@ -10,6 +10,7 @@ export interface WorkspaceData {
   scheduleActivities: ScheduleActivity[]
   instruments?: string[]
   messageTemplates?: Record<string, string>
+  intakeAutoSend?: boolean
 }
 
 const client = () => {
@@ -46,6 +47,33 @@ async function fetchAllRows(
   return { data: rows, error: null }
 }
 
+const leadFromRow = (row: any, activities: Activity[]): Lead => ({
+  id: row.id,
+  name: row.name,
+  studentName: row.student_name ?? undefined,
+  phone: row.phone ?? '',
+  email: row.email ?? '',
+  instruments: row.instruments?.length ? row.instruments : (row.instrument ? [row.instrument] : []),
+  receivedAt: row.received_at,
+  source: row.source,
+  campaign: row.campaign ?? '',
+  status: row.status,
+  activities,
+  trialAt: row.trial_at ?? undefined,
+  holdFormComplete: Boolean(row.hold_form_complete),
+  trialAttended: Boolean(row.trial_attended),
+  enrolledAt: row.enrolled_at ?? undefined,
+  enrollmentAgreementSigned: Boolean(row.enrollment_agreement_signed),
+  followUpAt: row.follow_up_at ?? undefined,
+  followUpNote: row.follow_up_note ?? undefined,
+  householdId: row.household_id ?? undefined,
+  cadenceShiftDays: row.cadence_shift_days ?? undefined,
+  cadencePauseUntil: row.cadence_pause_until ?? undefined,
+  cadencePauseStartedAt: row.cadence_pause_started_at ?? undefined,
+})
+
+const activityFromRow = (row: any): Activity => ({ id: row.id, type: row.type, occurredAt: row.occurred_at, outcome: row.outcome })
+
 export async function loadWorkspaceData(): Promise<WorkspaceData> {
   const db = client()
   const [leadResult, activityResult, instructorResult, availabilityResult, entryResult, openingResult, scheduleActivityResult, settingsResult] = await Promise.all([
@@ -64,7 +92,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
 
   const activitiesByLead = new Map<string, Activity[]>()
   for (const row of activityResult.data ?? []) {
-    const activity: Activity = { id: row.id, type: row.type, occurredAt: row.occurred_at, outcome: row.outcome }
+    const activity = activityFromRow(row)
     activitiesByLead.set(row.lead_id, [...(activitiesByLead.get(row.lead_id) ?? []), activity])
   }
 
@@ -74,30 +102,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
   const instructorNames = new Map(instructors.map((instructor) => [instructor.id, instructor.name]))
 
   return {
-    leads: (leadResult.data ?? []).map((row) => ({
-      id: row.id,
-      name: row.name,
-      studentName: row.student_name ?? undefined,
-      phone: row.phone ?? '',
-      email: row.email ?? '',
-      instruments: row.instruments?.length ? row.instruments : (row.instrument ? [row.instrument] : []),
-      receivedAt: row.received_at,
-      source: row.source,
-      campaign: row.campaign ?? '',
-      status: row.status,
-      activities: activitiesByLead.get(row.id) ?? [],
-      trialAt: row.trial_at ?? undefined,
-      holdFormComplete: Boolean(row.hold_form_complete),
-      trialAttended: Boolean(row.trial_attended),
-      enrolledAt: row.enrolled_at ?? undefined,
-      enrollmentAgreementSigned: Boolean(row.enrollment_agreement_signed),
-      followUpAt: row.follow_up_at ?? undefined,
-      followUpNote: row.follow_up_note ?? undefined,
-      householdId: row.household_id ?? undefined,
-      cadenceShiftDays: row.cadence_shift_days ?? undefined,
-      cadencePauseUntil: row.cadence_pause_until ?? undefined,
-      cadencePauseStartedAt: row.cadence_pause_started_at ?? undefined,
-    })),
+    leads: (leadResult.data ?? []).map((row) => leadFromRow(row, activitiesByLead.get(row.id) ?? [])),
     instructors,
     availability: (availabilityResult.data ?? []).map((row) => ({
       id: row.id,
@@ -136,6 +141,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
     })),
     instruments: settingsResult.data?.offered_instruments ?? undefined,
     messageTemplates: settingsResult.data?.message_templates ?? undefined,
+    intakeAutoSend: Boolean(settingsResult.data?.intake_auto_send),
   }
 }
 
@@ -340,5 +346,57 @@ export async function saveMessageTemplates(templates: Record<string, string>) {
   assertOk(userError)
   if (!user) throw new Error('You are not signed in.')
   const { error } = await db.from('app_settings').upsert({ owner_id: user.id, message_templates: templates }, { onConflict: 'owner_id' })
+  assertOk(error)
+}
+
+export interface IntakeData { inbound: InboundLead[]; emails: OutboundEmail[] }
+
+// Submissions waiting on a decision (possible duplicates, unreadable ones) and Day 0 emails that need attention
+// (drafts to approve, failed sends). Read-only; every change goes through /api/inbound/*.
+export async function loadIntakeData(): Promise<IntakeData> {
+  const db = client()
+  const [inboundResult, emailResult] = await Promise.all([
+    db.from('inbound_leads').select('*').in('status', ['needs_review', 'failed']).order('created_at', { ascending: true }).limit(100),
+    db.from('outbound_emails').select('*').in('status', ['draft', 'failed', 'queued', 'sending']).order('created_at', { ascending: true }).limit(100),
+  ])
+  assertOk(inboundResult.error)
+  assertOk(emailResult.error)
+  return {
+    inbound: (inboundResult.data ?? []).map((row): InboundLead => ({
+      id: row.id, source: row.source, receivedAt: row.received_at, parsed: row.parsed, status: row.status,
+      matchedLeadId: row.matched_lead_id ?? undefined, matchReason: row.match_reason ?? undefined, note: row.note ?? undefined, createdAt: row.created_at,
+    })),
+    emails: (emailResult.data ?? []).map((row): OutboundEmail => ({
+      id: row.id, leadId: row.lead_id, toEmail: row.to_email, subject: row.subject, textBody: row.text_body, status: row.status,
+      error: row.error ?? undefined, proposedTimes: row.proposed_times ?? [], createdAt: row.created_at,
+    })),
+  }
+}
+
+// Leads and notes the server created or added since `sinceIso` (automatic intake, merged duplicates, emails logged
+// as sent). The app only loads everything once, so this is how those show up without a reload.
+export async function loadChangesSince(sinceIso: string): Promise<{ leads: Lead[]; activities: { leadId: string; activity: Activity }[] }> {
+  const db = client()
+  const [leadResult, activityResult] = await Promise.all([
+    db.from('leads').select('*').gte('created_at', sinceIso).limit(200),
+    db.from('activities').select('*').gte('created_at', sinceIso).order('occurred_at', { ascending: true }).limit(500),
+  ])
+  assertOk(leadResult.error)
+  assertOk(activityResult.error)
+  const activities = activityResult.data ?? []
+  const byLead = new Map<string, Activity[]>()
+  for (const row of activities) byLead.set(row.lead_id, [...(byLead.get(row.lead_id) ?? []), activityFromRow(row)])
+  return {
+    leads: (leadResult.data ?? []).map((row) => leadFromRow(row, byLead.get(row.id) ?? [])),
+    activities: activities.map((row) => ({ leadId: row.lead_id, activity: activityFromRow(row) })),
+  }
+}
+
+export async function saveIntakeAutoSend(value: boolean) {
+  const db = client()
+  const { data: { user }, error: userError } = await db.auth.getUser()
+  assertOk(userError)
+  if (!user) throw new Error('You are not signed in.')
+  const { error } = await db.from('app_settings').upsert({ owner_id: user.id, intake_auto_send: value }, { onConflict: 'owner_id' })
   assertOk(error)
 }

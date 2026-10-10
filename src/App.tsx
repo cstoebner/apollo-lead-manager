@@ -6,12 +6,12 @@ import { ApiError, callApi } from './api'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, latestCadenceCheckpoint, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt, nurtureWeekFor } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
-import { loadAcuityData, loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
+import { loadAcuityData, loadChangesSince, loadIntakeData, loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveIntakeAutoSend, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import type { WorkspaceData } from './database'
 import { applyTemplate, defaultMessageTemplates, messageTemplateGroups } from './messageTemplates'
 import { nurtureMessageFor } from './nurtureTemplates'
 import { isSupabaseConfigured, supabase } from './supabase'
-import type { AcuityAppointmentSnapshot, AcuityEvent, Activity, ActivityType, FeeCharge, Hold, Instructor, InstructorAvailability, Lead, LeadStatus, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
+import type { Activity, ActivityType, AcuityAppointmentSnapshot, AcuityEvent, FeeCharge, Hold, InboundLead, Instructor, InstructorAvailability, Lead, LeadStatus, OutboundEmail, ScheduleActivity, ScheduleEntry, ScheduleEntryKind, TrialOpening } from './types'
 
 type View = 'today' | 'leads' | 'openings' | 'activity' | 'settings'
 type MessageTemplate = { label: string; message: string; needsTimes?: boolean; callFirst?: boolean }
@@ -133,7 +133,7 @@ const parseAcuityDate = (value: string) => new Date(value.replace(/([+-]\d{2})(\
 const acuityAction = (event: AcuityEvent) => event.eventType.replace(/^appointment\./, '')
 type BookingCard =
   | { kind: 'matched'; event: AcuityEvent; hold: Hold; lead: Lead }
-  | { kind: 'unmatched'; event: AcuityEvent }
+  | { kind: 'unmatched'; event: AcuityEvent; suggestion?: Lead }
   | { kind: 'moved'; event: AcuityEvent; lead: Lead }
   | { kind: 'canceled'; event: AcuityEvent; lead?: Lead }
 function leadForAppointment(event: AcuityEvent, holds: Hold[], events: AcuityEvent[], leads: Lead[]): Lead | undefined {
@@ -154,7 +154,11 @@ function bookingCardsFor(events: AcuityEvent[], holds: Hold[], leads: Lead[], in
       const at = appointment?.datetime ? parseAcuityDate(appointment.datetime).getTime() : NaN
       const hold = instructor ? holds.filter((item) => item.instructorId === instructor.id && Date.parse(item.startsAt) === at && (item.status === 'active' || item.status === 'expired')).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] : undefined
       const lead = hold ? leads.find((item) => item.id === hold.leadId) : undefined
-      return hold && lead ? [{ kind: 'matched', event, hold, lead }] : [{ kind: 'unmatched', event }]
+      if (hold && lead) return [{ kind: 'matched', event, hold, lead }]
+      // No hold (e.g. a family who booked from the Day 0 email's link): suggest the lead whose email matches the booking.
+      const bookedEmail = appointment?.email?.trim().toLowerCase()
+      const suggestion = bookedEmail ? leads.find((item) => item.email.trim().toLowerCase() === bookedEmail) : undefined
+      return [{ kind: 'unmatched', event, suggestion }]
     }
     if (action === 'rescheduled' || action === 'changed') {
       const lead = leadForAppointment(event, holds, events, leads)
@@ -328,6 +332,10 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [holds, setHolds] = useState<Hold[]>([])
   const [acuityEvents, setAcuityEvents] = useState<AcuityEvent[]>([])
   const [feeCharges, setFeeCharges] = useState<FeeCharge[]>([])
+  const [inboundLeads, setInboundLeads] = useState<InboundLead[]>([])
+  const [outboundEmails, setOutboundEmails] = useState<OutboundEmail[]>([])
+  const [intakeAutoSend, setIntakeAutoSend] = useState(false)
+  const changesSince = useRef(new Date(Date.now() - 2 * 60_000).toISOString())
   const [loadingData, setLoadingData] = useState(isSupabaseConfigured)
   const [dataError, setDataError] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -360,6 +368,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setScheduleActivities(data.scheduleActivities)
       setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
       setMessageTemplateOverrides(data.messageTemplates ?? {})
+      setIntakeAutoSend(Boolean(data.intakeAutoSend))
       setLoadingData(false)
       refreshAcuityData()
     }
@@ -379,6 +388,47 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const refreshAcuityData = () => {
     if (!isSupabaseConfigured) return
     void loadAcuityData().then((data) => { setHolds(data.holds); setAcuityEvents(data.events); setFeeCharges(data.feeCharges) }).catch((error: Error) => console.warn('Acuity data refresh failed:', error.message))
+    void loadIntakeData().then((data) => { setInboundLeads(data.inbound); setOutboundEmails(data.emails) }).catch((error: Error) => console.warn('Lead intake refresh failed:', error.message))
+    // Leads the server created (automatic intake) and notes it added (merged duplicates, emails sent) after this page loaded.
+    const startedAt = new Date(Date.now() - 2 * 60_000).toISOString()
+    void loadChangesSince(changesSince.current).then((changes) => {
+      changesSince.current = startedAt
+      if (!changes.leads.length && !changes.activities.length) return
+      setLeads((current) => {
+        const known = new Set(current.map((lead) => lead.id))
+        const updated = current.map((lead) => {
+          const extra = changes.activities.filter((item) => item.leadId === lead.id && !lead.activities.some((existing) => existing.id === item.activity.id)).map((item) => item.activity)
+          return extra.length ? { ...lead, activities: [...lead.activities, ...extra].sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt)) } : lead
+        })
+        const added = changes.leads.filter((lead) => !known.has(lead.id))
+        return added.length ? [...added, ...updated] : updated
+      })
+    }).catch((error: Error) => console.warn('New lead refresh failed:', error.message))
+  }
+  const resolveInbound = async (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => {
+    try {
+      const result = await callApi<{ status: string; leadId?: string; activity?: Activity }>('/api/inbound/resolve', { inboundId: inbound.id, decision })
+      setInboundLeads((current) => current.filter((item) => item.id !== inbound.id))
+      if (result.status === 'merged' && result.leadId && result.activity) {
+        const note = result.activity
+        setLeads((current) => current.map((lead) => lead.id === result.leadId && !lead.activities.some((item) => item.id === note.id) ? { ...lead, activities: [...lead.activities, note] } : lead))
+      }
+      refreshAcuityData()
+    } catch (error) {
+      window.alert(error instanceof ApiError ? error.message : `Could not save that: ${(error as Error).message}`)
+    }
+  }
+  const emailAction = async (email: OutboundEmail, action: 'approve' | 'discard') => {
+    try {
+      await callApi('/api/inbound/email', { emailId: email.id, action })
+      setOutboundEmails((current) => action === 'discard' ? current.filter((item) => item.id !== email.id) : current.map((item) => item.id === email.id ? { ...item, status: 'queued', error: undefined } : item))
+    } catch (error) {
+      window.alert(error instanceof ApiError ? error.message : `Could not save that: ${(error as Error).message}`)
+    }
+  }
+  const changeIntakeAutoSend = (value: boolean) => {
+    setIntakeAutoSend(value)
+    persist(saveIntakeAutoSend(value))
   }
   useEffect(() => {
     if (!isSupabaseConfigured) return
@@ -958,11 +1008,11 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} inboundLeads={inboundLeads} outboundEmails={outboundEmails} onResolveInbound={resolveInbound} onEmailAction={emailAction} onLinkSuggested={linkBooking} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
-        {view === 'settings' && <Settings instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onUpdateInstructor={updateInstructor} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
+        {view === 'settings' && <Settings intakeAutoSend={intakeAutoSend} onIntakeAutoSendChange={changeIntakeAutoSend} instruments={offeredInstruments} leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} messageTemplates={messageTemplates} onInstrumentsChange={replaceInstruments} onInstructorsChange={replaceInstructors} onUpdateInstructor={updateInstructor} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onRequestSignatures={requestSignaturesFromAllStudents} onSaveTemplate={saveMessageTemplate} onResetTemplate={resetMessageTemplate} />}
       </main>
 
       {selected && <LeadPanel lead={selected} instruments={offeredInstruments} trialOpenings={trialOpenings} messageTemplates={messageTemplates} siblings={selected.householdId ? leads.filter((item) => item.householdId === selected.householdId && item.id !== selected.id) : []} onClose={() => setSelectedId(null)} onLog={logActivity} onAddNote={addNote} onTextNow={startText} onTrialUpdate={updateTrial} onClearTrial={clearTrial} onStatusChange={changeStatus} onDeleteActivity={deleteActivity} onUpdateLead={updateLeadInfo} onDeleteLead={deleteLead} onScheduleFollowUp={scheduleFollowUp} onResolveFollowUp={resolveFollowUp} onAddSibling={() => setSiblingModalFor(selected)} onSelectSibling={setSelectedId} onResumeCadenceNow={resumeCadenceNow} onLogReply={logReply} onMoveCadence={moveCadence} />}
@@ -1174,7 +1224,7 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, acuityEvents, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, acuityEvents, inboundLeads, outboundEmails, onResolveInbound, onEmailAction, onLinkSuggested, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
   holds: Hold[]
   onReleaseHold: (hold: Hold) => void
   onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { reservation: string; link: string }>
@@ -1186,6 +1236,11 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   onApplyBookingChange: (event: AcuityEvent, lead: Lead) => void
   onCancelBooking: (event: AcuityEvent, lead?: Lead) => void
   onDismissEvent: (event: AcuityEvent, handledAs?: string) => void
+  inboundLeads: InboundLead[]
+  outboundEmails: OutboundEmail[]
+  onResolveInbound: (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => void
+  onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void
+  onLinkSuggested: (event: AcuityEvent, lead: Lead) => void
   leads: Lead[]
   instructors: Instructor[]
   instructorAvailability: InstructorAvailability[]
@@ -1326,7 +1381,8 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
         {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
-    <AcuityBookingCards cards={bookingCards} instructors={instructors} onConfirm={onConfirmBooking} onDecline={onDeclineBooking} onLink={(event) => setLinkEvent(event)} onApplyChange={onApplyBookingChange} onCancelBooking={onCancelBooking} onDismiss={onDismissEvent} />
+    <IntakeCards inbound={inboundLeads} emails={outboundEmails} leads={leads} onResolve={onResolveInbound} onEmailAction={onEmailAction} />
+    <AcuityBookingCards cards={bookingCards} instructors={instructors} onConfirm={onConfirmBooking} onDecline={onDeclineBooking} onLink={(event) => setLinkEvent(event)} onLinkLead={onLinkSuggested} onApplyChange={onApplyBookingChange} onCancelBooking={onCancelBooking} onDismiss={onDismissEvent} />
     {acuityLink && <AcuityLinkModal lead={acuityLink.lead} instructor={acuityLink.instructor} startsAt={acuityLink.startsAt} onClose={() => setAcuityLink(null)} onCreate={onCreateHold} onSendText={(message, kind) => onSendHoldText(acuityLink.lead, message, acuityLink.startsAt, kind)} />}
     {linkEvent && <LinkBookingModal leads={leads} event={linkEvent} onClose={() => setLinkEvent(null)} onLink={(lead) => { onLinkBooking(linkEvent, lead); setLinkEvent(null) }} />}
     <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} onStatusChange={onStatusChange} />
@@ -1355,7 +1411,63 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 
 const isTrialPromptReason = (reason: PendingActionItem['reason']): reason is TrialPromptReason => reason === 'booking_form' || reason === 'trial_complete' || reason === 'became_student'
 
-function AcuityBookingCards({ cards, instructors, onConfirm, onDecline, onLink, onApplyChange, onCancelBooking, onDismiss }: { cards: BookingCard[]; instructors: Instructor[]; onConfirm: (event: AcuityEvent, hold: Hold) => void; onDecline: (event: AcuityEvent, hold: Hold) => void; onLink: (event: AcuityEvent) => void; onApplyChange: (event: AcuityEvent, lead: Lead) => void; onCancelBooking: (event: AcuityEvent, lead?: Lead) => void; onDismiss: (event: AcuityEvent) => void }) {
+function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction }: { inbound: InboundLead[]; emails: OutboundEmail[]; leads: Lead[]; onResolve: (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => void; onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void }) {
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const review = inbound.filter((item) => item.status === 'needs_review')
+  const unreadable = inbound.filter((item) => item.status === 'failed')
+  const drafts = emails.filter((item) => item.status === 'draft')
+  const failedEmails = emails.filter((item) => item.status === 'failed')
+  if (!review.length && !unreadable.length && !drafts.length && !failedEmails.length) return null
+  const where = (item: InboundLead) => item.source === 'meta' ? 'Meta lead form' : 'website form'
+  const describe = (person: { name: string; studentName?: string | null; email?: string | null; phone?: string | null; instruments?: string[] }) =>
+    [person.name, person.studentName ? `student ${person.studentName}` : '', person.email, person.phone, person.instruments?.join(' / ')].filter(Boolean).join(' · ')
+  const leadName = (id: string) => leads.find((lead) => lead.id === id)?.name ?? 'this lead'
+  return <>
+    {review.length > 0 && <section className="card pending-card">
+      <div className="section-head"><div><h2>Possible duplicate leads</h2><p>A new submission matches someone already in Apollo. No email was sent.</p></div></div>
+      <div className="pending-list">{review.map((item) => {
+        const existing = leads.find((lead) => lead.id === item.matchedLeadId)
+        return <article key={item.id} className="pending-row">
+          <div className="pending-person static"><span>
+            <strong>Is this the same lead?</strong>
+            <small>Already in Apollo: {existing ? describe({ ...existing, instruments: existing.instruments }) : 'that lead has since been removed'}</small>
+            <small>New {where(item)} submission: {describe(item.parsed)} · matched on {item.matchReason ?? 'contact details'}</small>
+          </span></div>
+          <div className="row-actions">
+            {existing && <button className="prompt-yes" onClick={() => onResolve(item, 'same')}>✓ Yes, same lead</button>}
+            <button className="prompt-no" onClick={() => onResolve(item, 'different')}>✕ No, new lead</button>
+          </div>
+        </article>
+      })}</div>
+    </section>}
+    {unreadable.length > 0 && <section className="card pending-card">
+      <div className="section-head"><div><h2>Submissions that couldn't be read</h2><p>These weren't added automatically. Add them with New lead if they're real.</p></div></div>
+      <div className="pending-list">{unreadable.map((item) => <article key={item.id} className="pending-row">
+        <div className="pending-person static"><span><strong>{where(item)[0].toUpperCase() + where(item).slice(1)} — {item.note ?? 'could not be read'}</strong><small>{describe(item.parsed) || 'No details found'}</small></span></div>
+        <div className="row-actions"><button onClick={() => onResolve(item, 'dismiss')}>Dismiss</button></div>
+      </article>)}</div>
+    </section>}
+    {(drafts.length > 0 || failedEmails.length > 0) && <section className="card pending-card">
+      <div className="section-head"><div><h2>Day 0 emails</h2><p>{drafts.length ? 'Automatic emails waiting for your OK. Approve to send from your Gmail.' : 'These emails could not be sent.'}</p></div></div>
+      <div className="pending-list">{[...drafts, ...failedEmails].map((email) => <article key={email.id} className="pending-row email-row">
+        <div className="pending-person static"><span>
+          <strong>{email.status === 'failed' ? 'Email not sent' : 'Email ready'} — {leadName(email.leadId)}</strong>
+          <small>To {email.toEmail} · {email.subject}</small>
+          <small>{email.proposedTimes.length ? `Offering ${email.proposedTimes.map((time) => `${time.label} with ${time.instructor}`).join(' and ')}` : 'No openings to offer — booking link only'}</small>
+          {email.error && <small className="email-error">{email.error}</small>}
+          {previewId === email.id && <pre className="email-preview">{email.textBody}</pre>}
+        </span></div>
+        <div className="row-actions">
+          <button onClick={() => setPreviewId(previewId === email.id ? null : email.id)}>{previewId === email.id ? 'Hide' : 'Preview'}</button>
+          <button className="prompt-yes" onClick={() => onEmailAction(email, 'approve')}>{email.status === 'failed' ? '↻ Retry' : '✓ Approve & send'}</button>
+          <button className="prompt-no" onClick={() => onEmailAction(email, 'discard')}>✕ Discard</button>
+        </div>
+      </article>)}</div>
+    </section>}
+  </>
+}
+
+function AcuityBookingCards({ cards, instructors, onConfirm, onDecline, onLink, onLinkLead, onApplyChange, onCancelBooking, onDismiss }: { cards: BookingCard[]; instructors: Instructor[]; onConfirm: (event: AcuityEvent, hold: Hold) => void; onDecline: (event: AcuityEvent, hold: Hold) => void; onLink: (event: AcuityEvent) => void; onLinkLead: (event: AcuityEvent, lead: Lead) => void; onApplyChange: (event: AcuityEvent, lead: Lead) => void; onCancelBooking: (event: AcuityEvent, lead?: Lead) => void; onDismiss: (event: AcuityEvent) => void }) {
   if (!cards.length) return null
   const bookedBy = (a?: AcuityAppointmentSnapshot) => a ? ([`${a.firstName ?? ''} ${a.lastName ?? ''}`.trim(), a.email, a.phone].filter(Boolean).join(' · ') || 'Details unavailable') : 'Details unavailable'
   const when = (a?: AcuityAppointmentSnapshot) => a?.datetime ? formatTrialTime(parseAcuityDate(a.datetime)) : 'unknown time'
@@ -1368,13 +1480,15 @@ function AcuityBookingCards({ cards, instructors, onConfirm, onDecline, onLink, 
       return <article key={card.event.id} className="pending-row">
         <div className="pending-person static"><span>
           {card.kind === 'matched' && <><strong>Booking received — held for {card.lead.name}</strong><small>Held: {formatTrialTime(card.hold.startsAt)} · {teacher(a)}</small><small>Booked by: {bookedBy(a)} · at {bookedAt}</small></>}
-          {card.kind === 'unmatched' && <><strong>New booking, no hold at this time</strong><small>{when(a)} · {teacher(a)}</small><small>Booked by: {bookedBy(a)} · at {bookedAt}</small></>}
+          {card.kind === 'unmatched' && card.suggestion && <><strong>New booking — looks like {card.suggestion.name}</strong><small>{when(a)} · {teacher(a)}</small><small>Booked by: {bookedBy(a)} · at {bookedAt} · the email matches {card.suggestion.name}'s lead</small></>}
+          {card.kind === 'unmatched' && !card.suggestion && <><strong>New booking, no hold at this time</strong><small>{when(a)} · {teacher(a)}</small><small>Booked by: {bookedBy(a)} · at {bookedAt}</small></>}
           {card.kind === 'moved' && <><strong>Booking moved — {card.lead.name}</strong><small>Now {when(a)} · {teacher(a)} (tracker still shows {card.lead.trialAt ? formatTrialTime(card.lead.trialAt) : 'no trial'})</small></>}
           {card.kind === 'canceled' && <><strong>Booking canceled{card.lead ? ` — ${card.lead.name}` : ''}</strong><small>{when(a)} · {teacher(a)}{!card.lead ? ' · not linked to a lead in the tracker' : ''}</small></>}
         </span></div>
         <div className="row-actions">
           {card.kind === 'matched' && <><button className="prompt-yes" onClick={() => onConfirm(card.event, card.hold)}>✓ Confirm</button><button className="prompt-no" onClick={() => onDecline(card.event, card.hold)}>✕ Don’t confirm</button></>}
-          {card.kind === 'unmatched' && <><button className="prompt-yes" onClick={() => onLink(card.event)}>Link to a lead…</button><button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
+          {card.kind === 'unmatched' && card.suggestion && <><button className="prompt-yes" onClick={() => onLinkLead(card.event, card.suggestion!)}>✓ Confirm for {card.suggestion.name.split(' ')[0]}</button><button onClick={() => onLink(card.event)}>Link to a different lead…</button><button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
+          {card.kind === 'unmatched' && !card.suggestion && <><button className="prompt-yes" onClick={() => onLink(card.event)}>Link to a lead…</button><button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
           {card.kind === 'moved' && <><button className="prompt-yes" onClick={() => onApplyChange(card.event, card.lead)}>✓ Update the trial</button><button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
           {card.kind === 'canceled' && <>{card.lead && <button className="prompt-no" onClick={() => onCancelBooking(card.event, card.lead)}>Clear trial in tracker</button>}<button onClick={() => onDismiss(card.event)}>Dismiss</button></>}
         </div>
@@ -1931,7 +2045,9 @@ function CadenceInsertModal({ leads, instruments, instructors, onClose, onSave, 
   </section></div>
 }
 
-function Settings({ instruments, leads, instructors, availability, entries, openings, messageTemplates, onInstrumentsChange, onInstructorsChange, onUpdateInstructor, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onRequestSignatures, onSaveTemplate, onResetTemplate }: {
+function Settings({ intakeAutoSend, onIntakeAutoSendChange, instruments, leads, instructors, availability, entries, openings, messageTemplates, onInstrumentsChange, onInstructorsChange, onUpdateInstructor, onAvailabilityChange, onEntriesChange, onOpeningsChange, onScheduleLog, onRequestSignatures, onSaveTemplate, onResetTemplate }: {
+  intakeAutoSend: boolean
+  onIntakeAutoSendChange: (value: boolean) => void
   instruments: string[]
   leads: Lead[]
   instructors: Instructor[]
@@ -2010,6 +2126,7 @@ function Settings({ instruments, leads, instructors, availability, entries, open
     <div className="card setting-card settings-wide"><h2>Instruments offered</h2><p>This list controls the instrument choices used throughout the lead manager.</p><form className="settings-add-row" onSubmit={(event) => { event.preventDefault(); addInstrument() }}><input value={newInstrument} onChange={(event) => setNewInstrument(event.target.value)} placeholder="Add an instrument" /><button className="primary" type="submit" disabled={!newInstrument.trim()}>＋ Add</button></form><div className="settings-item-list">{instruments.map((instrument) => { const used = instrumentIsUsed(instrument); return <span key={instrument}><b>{instrument}</b>{used && <small>In use</small>}<button disabled={used} title={used ? `${instrument} is currently in use` : `Remove ${instrument}`} onClick={() => removeInstrument(instrument)}>×</button></span> })}</div></div>
     <div className="card setting-card settings-wide"><h2>Instructor roster</h2><p>Add instructors and edit the instruments each person teaches.</p><label className="field">Name<input value={newInstructorName} onChange={(event) => setNewInstructorName(event.target.value)} placeholder="Instructor name" /></label><div className="instrument-checks settings-instrument-checks">{alphabetical(instruments).map((instrument) => <label key={instrument}><input type="checkbox" checked={newInstructorInstruments.includes(instrument)} onChange={(event) => setNewInstructorInstruments((current) => event.target.checked ? [...current, instrument] : current.filter((item) => item !== instrument))} /> {instrument}</label>)}</div><button className="secondary" onClick={addInstructor}>＋ Add instructor</button><div className="settings-instructor-list">{instructors.map((item) => <article key={item.id}><div><b>{item.name}</b><small>{alphabetical(item.instruments).join(' / ')}{item.acuityCalendarId ? ` · Acuity calendar ${item.acuityCalendarId}` : isSupabaseConfigured ? ' · Not linked to Acuity' : ''}</small></div><button className="edit-instructor" onClick={() => setEditingInstructor(item)}>Edit</button><button className="remove-instructor" title={`Remove ${item.name}`} onClick={() => removeInstructor(item)}>×</button></article>)}</div></div>
     {isSupabaseConfigured && <AcuitySyncCard instructors={instructors} />}
+    {isSupabaseConfigured && <div className="card setting-card"><h2>Automatic lead emails</h2><p>New Meta and website leads get a Day 0 email with the first two open trial times (at least 24 hours out) and a Book now link. Edit the wording under Message templates.</p><label className="toggle-row"><span><strong>Send automatically</strong><small>{intakeAutoSend ? 'On: each email goes out from your Gmail within about a minute of the lead arriving.' : 'Off: each email waits for your approval on the Today page first.'}</small></span><input type="checkbox" checked={intakeAutoSend} onChange={(event) => onIntakeAutoSendChange(event.target.checked)} /></label></div>}
     <div className="card setting-card"><h2>Contact availability</h2><p>Recommendations will land inside these windows.</p><div className="schedule-row"><span>Monday–Thursday</span><strong>4:30–5:30 PM</strong></div><div className="schedule-row"><span>Friday</span><strong>4:00–5:15 PM</strong></div><div className="schedule-row"><span>Saturday</span><strong>10:00 AM–12:00 PM</strong></div><div className="schedule-row"><span>Sunday</span><strong>1:00–3:00 PM</strong></div><div className="blackout"><strong>Note</strong><span>Sunday is hot leads only — nurture contacts wait until Monday.</span><span>A brand-new lead is contacted immediately, any day, regardless of these windows.</span></div><button className="secondary">Edit availability</button></div>
     <div className="card setting-card"><h2>Calendar rules</h2><p>The follow-up plan automatically recognizes the day of week and major U.S. holidays.</p><label className="toggle-row"><span><strong>Avoid major holidays</strong><small>Move planned outreach to the next open day</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><strong>Allow weekend outreach</strong><small>Use your weekend availability for fresh leads</small></span><input type="checkbox" defaultChecked /></label></div>
     <div className="card setting-card"><h2>Enrollment agreement</h2><p>Track signature collection for every active student. Use this after a terms update to have everyone re-sign.</p><button className="secondary full" onClick={onRequestSignatures}>⚠ Major update to terms — collect signatures from all students</button><small className="muted" style={{ display: 'block', marginTop: 10 }}>This adds every current active student to Action Pending until their signature is collected. Inactive or unenrolled leads are never included.</small></div>

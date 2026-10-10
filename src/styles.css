@@ -57,3 +57,4 @@
 .outreach-expanded{background:#fbfcfe;border-top:1px solid #e8eef5;padding-top:6px;padding-bottom:6px}
 .outreach-day.expanded .outreach-summary{background:#f3f8fc}
 @media(max-width:900px){.outreach-summary{grid-template-columns:70px 1fr 18px}.outreach-summary>b{grid-column:2;justify-self:start}.outreach-chevron{grid-column:3;grid-row:1}}
+.email-preview{margin:8px 0 0;padding:12px 14px;border:1px solid #e0e8f1;border-radius:9px;background:#f7fafd;color:#244b76;font:13px/1.5 inherit;white-space:pre-wrap;overflow-wrap:anywhere;max-width:640px}.email-error{color:#a74435}

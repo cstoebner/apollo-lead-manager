@@ -15,6 +15,9 @@ export const defaultMessageTemplates: Record<string, string> = {
   nurture_long_term: 'Hi {{firstName}}, a couple of {{instrument}} trial openings have become available, so I wanted to check with you:\n\n1️⃣ [Day/Time 1]\n2️⃣ [Day/Time 2]\n\nWould either work for you?',
   acuity_reservation: 'Hi {{firstName}},\n\nI can hold {{trialTime}} for you for 24 hours while you complete the registration form. Once the form is submitted, the lesson will be officially reserved.\n\nThe form requires a credit card on file. The trial lesson is completely free; a $40 fee applies only if the lesson is canceled or rescheduled with less than 24 hours’ notice, or if the student does not attend.\n\nI’ll send the link next. Please let me know if you have any questions!',
   acuity_link_text: '{{bookingLink}}',
+  intake_day0_email_subject: 'Your free {{instrument}} trial lesson at Apollo Music Academy',
+  intake_day0_email: 'Hi {{firstName}},\n\nThis is Conor with Apollo Music Academy. Thanks for reaching out about {{instrument}} lessons!\n\nWe offer a free 30-minute trial at World Learner School in Chaska. Weekly lessons afterward are $40 per 30 minutes.\n\nI currently have:\n\n1️⃣ {{time1}}\n2️⃣ {{time2}}\n\nJust reply to this email with the one that works best for you.\n\nDon’t want to wait? You can book your free trial right now:\n\n{{bookingLink}}\n\nThanks,\nConor',
+  intake_day0_email_no_times: 'Hi {{firstName}},\n\nThis is Conor with Apollo Music Academy. Thanks for reaching out about {{instrument}} lessons!\n\nWe offer a free 30-minute trial at World Learner School in Chaska. Weekly lessons afterward are $40 per 30 minutes.\n\nReply with the days and times that usually work best and I’ll find the best fit. Or, if you’d like to pick a time yourself, you can book your free trial right now:\n\n{{bookingLink}}\n\nThanks,\nConor',
   trial_form_reminder: 'Hi {{firstName}}, I’m still holding {{trialTime}} until {{deadline}}, but I haven’t seen the registration form come through yet.\n\nIf you’d like to keep the trial time, please complete it by then. Otherwise, I’ll release the appointment and we can look at other options when you’re ready.',
 }
 
@@ -41,6 +44,14 @@ export const messageTemplateGroups: { title: string; items: { key: string; label
       { key: 'nurture_week10', label: 'Week 10', variables: ['firstName', 'instrument'] },
       { key: 'nurture_week12', label: 'Week 12 · Final regular check-in', variables: ['firstName', 'instrument'] },
       { key: 'nurture_long_term', label: 'Long-term · Opening available', variables: ['firstName', 'instrument'] },
+    ],
+  },
+  {
+    title: 'Automatic Day 0 email (new leads)',
+    items: [
+      { key: 'intake_day0_email_subject', label: 'Subject line', variables: ['firstName', 'instrument'] },
+      { key: 'intake_day0_email', label: 'Email · two trial times', variables: ['firstName', 'instrument', 'time1', 'time2', 'bookingLink'] },
+      { key: 'intake_day0_email_no_times', label: 'Email · no openings to offer', variables: ['firstName', 'instrument', 'bookingLink'] },
     ],
   },
   {
