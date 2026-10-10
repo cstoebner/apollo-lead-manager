@@ -367,7 +367,7 @@ export async function loadIntakeData(): Promise<IntakeData> {
       matchedLeadId: row.matched_lead_id ?? undefined, matchReason: row.match_reason ?? undefined, note: row.note ?? undefined, createdAt: row.created_at,
     })),
     emails: (emailResult.data ?? []).map((row): OutboundEmail => ({
-      id: row.id, leadId: row.lead_id, toEmail: row.to_email, subject: row.subject, textBody: row.text_body, status: row.status,
+      id: row.id, leadId: row.lead_id, toEmail: row.to_email, subject: row.subject, textBody: row.text_body, htmlBody: row.html_body, status: row.status,
       error: row.error ?? undefined, proposedTimes: row.proposed_times ?? [], createdAt: row.created_at,
     })),
   }

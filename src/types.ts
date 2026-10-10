@@ -169,6 +169,7 @@ export interface OutboundEmail {
   toEmail: string
   subject: string
   textBody: string
+  htmlBody: string
   status: 'draft' | 'queued' | 'sending' | 'sent' | 'failed' | 'discarded'
   error?: string
   proposedTimes: { startsAt: string; label: string; instructor: string }[]

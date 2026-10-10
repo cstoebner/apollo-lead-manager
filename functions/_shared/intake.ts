@@ -261,6 +261,48 @@ export function composeEmail(templates: Record<string, string>, lead: IntakeLead
   return { subject: applyTemplate(templates.intake_day0_email_subject, vars), text, html: toHtml(text, bookingLink) }
 }
 
+// Picks the openings and writes the email for a lead, using whatever is open right now. Returns null when the
+// lead's instrument has no Acuity trial type (so there's no booking link to send).
+export async function buildDay0Email(db: Db, settings: Settings, lead: IntakeLead, knownTypes?: { instrument: string; appointment_type_id: string }[]) {
+  const types = knownTypes ?? (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
+  const type = lead.instruments.map((item) => types.find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
+  if (!type) return null
+  const times = await pickOpenings(db, lead.instruments)
+  return { times, email: composeEmail(settings.templates, lead, times, type.appointment_type_id) }
+}
+
+export interface RefreshedEmail { id: string; subject: string; textBody: string; htmlBody: string; proposedTimes: ProposedTime[] }
+
+// Re-reads the schedule and rewrites emails that haven't gone out yet (drafts and failed sends), so a newly flagged
+// opening shows up in the preview and in what finally gets sent. Capped because each email costs several queries and
+// Cloudflare limits how many one request may make.
+export async function refreshDraftEmails(env: Env, ids?: string[]): Promise<RefreshedEmail[]> {
+  const db = supabaseAdmin(env)
+  const settings = await loadSettings(db)
+  let query = db.from('outbound_emails').select('id, lead_id').in('status', ['draft', 'failed']).order('created_at', { ascending: true }).limit(3)
+  if (ids?.length) query = query.in('id', ids.slice(0, 3))
+  const { data: emails } = await query
+  const types = (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
+  const refreshed: RefreshedEmail[] = []
+  for (const row of emails ?? []) {
+    const { data: leadRow } = await db.from('leads').select('name, student_name, email, phone, instruments, instrument').eq('id', row.lead_id).single()
+    if (!leadRow) continue
+    const lead: IntakeLead = {
+      name: leadRow.name, studentName: leadRow.student_name ?? undefined, email: leadRow.email ?? '', phone: leadRow.phone ?? '',
+      instruments: leadRow.instruments?.length ? leadRow.instruments : leadRow.instrument ? [leadRow.instrument] : [],
+      source: 'Meta', campaign: '', receivedAt: new Date().toISOString(), notes: [],
+    }
+    const built = await buildDay0Email(db, settings, lead, types)
+    if (!built) continue
+    const { error } = await db.from('outbound_emails')
+      .update({ subject: built.email.subject, text_body: built.email.text, html_body: built.email.html, proposed_times: built.times, to_email: lead.email || undefined })
+      .eq('id', row.id).in('status', ['draft', 'failed'])
+    if (error) throw new Error(error.message)
+    refreshed.push({ id: row.id, subject: built.email.subject, textBody: built.email.text, htmlBody: built.email.html, proposedTimes: built.times })
+  }
+  return refreshed
+}
+
 // ---------- creating the lead ----------
 
 export interface IntakeOutcome { status: 'created' | 'needs_review' | 'failed' | 'already_processed'; leadId?: string; emailStatus?: string; note?: string }
@@ -289,15 +331,12 @@ export async function createLeadFromIntake(env: Env, db: Db, settings: Settings,
 
   let emailStatus: string | undefined
   if (lead.email) {
-    const { data: types } = await db.from('acuity_appointment_types').select('instrument, appointment_type_id')
-    const type = lead.instruments.map((item) => (types ?? []).find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
-    if (type) {
-      const times = await pickOpenings(db, lead.instruments)
-      const email = composeEmail(settings.templates, lead, times, type.appointment_type_id)
+    const built = await buildDay0Email(db, settings, lead)
+    if (built) {
       emailStatus = settings.autoSend ? 'queued' : 'draft'
       const { error: emailError } = await db.from('outbound_emails').insert({
-        lead_id: leadId, inbound_lead_id: inboundId, kind: 'day0', to_email: lead.email, subject: email.subject, text_body: email.text, html_body: email.html,
-        proposed_times: times, status: emailStatus,
+        lead_id: leadId, inbound_lead_id: inboundId, kind: 'day0', to_email: lead.email, subject: built.email.subject, text_body: built.email.text, html_body: built.email.html,
+        proposed_times: built.times, status: emailStatus,
       })
       if (emailError) throw new Error(`Could not queue the email: ${emailError.message}`)
     }

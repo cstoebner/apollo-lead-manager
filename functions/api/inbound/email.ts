@@ -1,14 +1,25 @@
 import type { Env } from '../../_shared/env'
 import { requireSignedInUser } from '../../_shared/auth'
 import { supabaseAdmin } from '../../_shared/supabaseAdmin'
+import { refreshDraftEmails } from '../../_shared/intake'
 import { withJsonErrors } from '../../_shared/handler'
 
-// Draft review: approve (queue it for the Gmail script to send) or discard. Also retries a failed send.
+// Draft review.
+//   refresh  -> re-read the schedule and rewrite the draft(s) (all drafts, or just { emailId }) so the preview
+//               shows the openings that exist right now
+//   approve  -> refresh it one last time, then queue it for the Gmail script to send (also retries a failed send)
+//   discard  -> drop it
 export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) => {
   const authError = await requireSignedInUser(context.request, context.env)
   if (authError) return authError
-  const { emailId, action } = (await context.request.json()) as { emailId?: string; action?: 'approve' | 'discard' }
+  const { emailId, action } = (await context.request.json()) as { emailId?: string; action?: 'approve' | 'discard' | 'refresh' }
+
+  if (action === 'refresh') return Response.json({ ok: true, emails: await refreshDraftEmails(context.env, emailId ? [emailId] : undefined) })
+
   if (!emailId || (action !== 'approve' && action !== 'discard')) return Response.json({ error: 'Expected { emailId, action }.' }, { status: 400 })
+  if (action === 'approve') {
+    try { await refreshDraftEmails(context.env, [emailId]) } catch (error) { console.warn('Refresh before approving failed:', error) } // best effort: fall back to the draft as shown
+  }
   const db = supabaseAdmin(context.env)
   const allowed = action === 'approve' ? ['draft', 'failed'] : ['draft', 'failed', 'queued']
   const { data, error } = await db.from('outbound_emails')

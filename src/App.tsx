@@ -426,6 +426,30 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       window.alert(error instanceof ApiError ? error.message : `Could not save that: ${(error as Error).message}`)
     }
   }
+  // Rewrites the draft emails from the schedule as it is right now (a slot you just opened should appear in the preview).
+  const refreshDrafts = async (emailId?: string) => {
+    if (!isSupabaseConfigured) return
+    try {
+      const result = await callApi<{ emails: { id: string; subject: string; textBody: string; htmlBody: string; proposedTimes: OutboundEmail['proposedTimes'] }[] }>('/api/inbound/email', { action: 'refresh', emailId })
+      if (!result.emails.length) return
+      setOutboundEmails((current) => current.map((email) => result.emails.find((item) => item.id === email.id) ? { ...email, ...result.emails.find((item) => item.id === email.id)! } : email))
+    } catch (error) {
+      console.warn('Draft refresh failed:', (error as Error).message)
+    }
+  }
+  const hasDrafts = outboundEmails.some((email) => email.status === 'draft')
+  // Flagging or unflagging an opening changes what a draft should offer; give the save a moment to land, then rewrite the drafts.
+  useEffect(() => {
+    if (!hasDrafts) return
+    const timer = window.setTimeout(() => void refreshDrafts(), 3000)
+    return () => window.clearTimeout(timer)
+  }, [trialOpenings, hasDrafts])
+  // ...and keep them fresh while the Today page sits open (a teacher may change their schedule elsewhere).
+  useEffect(() => {
+    if (!hasDrafts) return
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refreshDrafts() }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [hasDrafts])
   const changeIntakeAutoSend = (value: boolean) => {
     setIntakeAutoSend(value)
     persist(saveIntakeAutoSend(value))
@@ -1008,7 +1032,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} inboundLeads={inboundLeads} outboundEmails={outboundEmails} onResolveInbound={resolveInbound} onEmailAction={emailAction} onLinkSuggested={linkBooking} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} inboundLeads={inboundLeads} outboundEmails={outboundEmails} onResolveInbound={resolveInbound} onEmailAction={emailAction} onRefreshEmail={(email) => void refreshDrafts(email.id)} onLinkSuggested={linkBooking} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -1224,7 +1248,7 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, acuityEvents, inboundLeads, outboundEmails, onResolveInbound, onEmailAction, onLinkSuggested, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, acuityEvents, inboundLeads, outboundEmails, onResolveInbound, onEmailAction, onRefreshEmail, onLinkSuggested, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
   holds: Hold[]
   onReleaseHold: (hold: Hold) => void
   onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { reservation: string; link: string }>
@@ -1240,6 +1264,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   outboundEmails: OutboundEmail[]
   onResolveInbound: (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => void
   onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void
+  onRefreshEmail: (email: OutboundEmail) => void
   onLinkSuggested: (event: AcuityEvent, lead: Lead) => void
   leads: Lead[]
   instructors: Instructor[]
@@ -1381,7 +1406,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
         {!queue.length && <div className="today-complete"><strong>All caught up for today</strong><span>Your next scheduled contacts are previewed below.</span></div>}
       </div>
     </section>
-    <IntakeCards inbound={inboundLeads} emails={outboundEmails} leads={leads} onResolve={onResolveInbound} onEmailAction={onEmailAction} />
+    <IntakeCards inbound={inboundLeads} emails={outboundEmails} leads={leads} onResolve={onResolveInbound} onEmailAction={onEmailAction} onRefresh={onRefreshEmail} />
     <AcuityBookingCards cards={bookingCards} instructors={instructors} onConfirm={onConfirmBooking} onDecline={onDeclineBooking} onLink={(event) => setLinkEvent(event)} onLinkLead={onLinkSuggested} onApplyChange={onApplyBookingChange} onCancelBooking={onCancelBooking} onDismiss={onDismissEvent} />
     {acuityLink && <AcuityLinkModal lead={acuityLink.lead} instructor={acuityLink.instructor} startsAt={acuityLink.startsAt} onClose={() => setAcuityLink(null)} onCreate={onCreateHold} onSendText={(message, kind) => onSendHoldText(acuityLink.lead, message, acuityLink.startsAt, kind)} />}
     {linkEvent && <LinkBookingModal leads={leads} event={linkEvent} onClose={() => setLinkEvent(null)} onLink={(lead) => { onLinkBooking(linkEvent, lead); setLinkEvent(null) }} />}
@@ -1411,7 +1436,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 
 const isTrialPromptReason = (reason: PendingActionItem['reason']): reason is TrialPromptReason => reason === 'booking_form' || reason === 'trial_complete' || reason === 'became_student'
 
-function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction }: { inbound: InboundLead[]; emails: OutboundEmail[]; leads: Lead[]; onResolve: (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => void; onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void }) {
+function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction, onRefresh }: { inbound: InboundLead[]; emails: OutboundEmail[]; leads: Lead[]; onResolve: (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => void; onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void; onRefresh: (email: OutboundEmail) => void }) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const review = inbound.filter((item) => item.status === 'needs_review')
   const unreadable = inbound.filter((item) => item.status === 'failed')
@@ -1455,10 +1480,10 @@ function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction }: { inb
           <small>To {email.toEmail} · {email.subject}</small>
           <small>{email.proposedTimes.length ? `Offering ${email.proposedTimes.map((time) => `${time.label} with ${time.instructor}`).join(' and ')}` : 'No openings to offer — booking link only'}</small>
           {email.error && <small className="email-error">{email.error}</small>}
-          {previewId === email.id && <pre className="email-preview">{email.textBody}</pre>}
+          {previewId === email.id && <iframe className="email-preview" title={`Preview of the email to ${leadName(email.leadId)}`} sandbox="" srcDoc={email.htmlBody} />}
         </span></div>
         <div className="row-actions">
-          <button onClick={() => setPreviewId(previewId === email.id ? null : email.id)}>{previewId === email.id ? 'Hide' : 'Preview'}</button>
+          <button onClick={() => { const opening = previewId !== email.id; setPreviewId(opening ? email.id : null); if (opening) onRefresh(email) }}>{previewId === email.id ? 'Hide' : 'Preview'}</button>
           <button className="prompt-yes" onClick={() => onEmailAction(email, 'approve')}>{email.status === 'failed' ? '↻ Retry' : '✓ Approve & send'}</button>
           <button className="prompt-no" onClick={() => onEmailAction(email, 'discard')}>✕ Discard</button>
         </div>
