@@ -234,14 +234,42 @@ export async function pickOpenings(db: Db, instruments: string[], now = Date.now
 
 const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+// The email is built to open with nothing to "load": the layout is plain HTML tables with inline styles, and the one
+// image (the logo) is attached to the message itself (cid:apollo-logo, added by the Gmail script) rather than linked
+// from a website, so mail apps have no remote content to block. Web fonts can't be relied on in email, so the brand
+// fonts (Fredoka headings, Nunito Sans body) are listed first and fall back to similar rounded/clean system fonts.
+const BRAND = { navy: '#1C3A64', blue: '#2F5FCE', gold: '#D9A441', cream: '#FFFAF3', slate: '#5B6478', page: '#EFE9DD' }
+const BODY_FONT = "'Nunito Sans','Avenir Next','Segoe UI',Helvetica,Arial,sans-serif"
+const HEADING_FONT = "Fredoka,'Arial Rounded MT Bold','Avenir Next Rounded','Trebuchet MS',Helvetica,Arial,sans-serif"
+
 function toHtml(text: string, bookingLink: string) {
-  const blocks = text.split(/\n{2,}/).map((block) => {
-    if (block.trim() === bookingLink) {
-      return `<p style="margin:20px 0;"><a href="${escapeHtml(bookingLink)}" style="background:#2d3fe0;color:#ffffff;padding:13px 24px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;">Book my free trial now</a></p>`
+  const blocks = text.split(/\n{2,}/).map((block, index) => {
+    const trimmed = block.trim()
+    if (trimmed === bookingLink) {
+      return `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:6px auto 4px;"><tr><td align="center" bgcolor="${BRAND.blue}" style="background:${BRAND.blue};border-radius:26px;"><a href="${escapeHtml(bookingLink)}" style="display:inline-block;padding:15px 34px;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:26px;">Book my free trial now</a></td></tr></table>`
+        + `<p style="margin:12px 0 28px;text-align:center;font-family:${BODY_FONT};font-size:13px;color:${BRAND.slate};">Or go to <a href="${escapeHtml(bookingLink)}" style="color:${BRAND.blue};">apollo-music-academy-booking.as.me</a></p>`
     }
-    return `<p style="margin:0 0 16px;">${escapeHtml(block).replace(/\n/g, '<br>')}</p>`
+    const lines = trimmed.split('\n')
+    if (lines.every((line) => /^[0-9]\uFE0F?\u20E3/.test(line.trim()))) {
+      // "1️⃣ Wednesday, October 14 at 5:00 PM with Adam" -> a numbered row, without the emoji
+      const rows = lines.map((line) => `<tr><td style="padding:5px 0;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${BRAND.cream};border:1px solid #EDE6D8;border-radius:12px;"><tr><td width="44" align="center" style="padding:12px 0 12px 14px;"><div style="width:28px;height:28px;line-height:28px;border-radius:14px;background:${BRAND.blue};color:#ffffff;font-family:${BODY_FONT};font-size:14px;font-weight:700;text-align:center;">${escapeHtml(line.trim().charAt(0))}</div></td><td style="padding:12px 16px 12px 8px;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:${BRAND.navy};">${escapeHtml(line.trim().replace(/^[0-9]\uFE0F?\u20E3\s*/, ''))}</td></tr></table></td></tr>`).join('')
+      return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:4px 0 18px;">${rows}</table>`
+    }
+    const body = escapeHtml(trimmed).replace(/\n/g, '<br>')
+    if (index === 0 && /^Hi\b/i.test(trimmed)) {
+      return `<p style="margin:0 0 16px;font-family:${HEADING_FONT};font-size:24px;font-weight:600;line-height:1.25;color:${BRAND.navy};">${body}</p>`
+    }
+    return `<p style="margin:0 0 16px;font-family:${BODY_FONT};font-size:16px;line-height:1.6;color:${BRAND.slate};">${body}</p>`
   })
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a;max-width:560px;">${blocks.join('')}</div>`
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"></head>`
+    + `<body style="margin:0;padding:0;background:${BRAND.page};">`
+    + `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Your free trial lesson at Apollo Music Academy: pick a time or book right now.</div>`
+    + `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${BRAND.page};"><tr><td align="center" style="padding:24px 12px;">`
+    + `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:580px;background:#ffffff;border-radius:16px;overflow:hidden;">`
+    + `<tr><td align="center" bgcolor="${BRAND.cream}" style="background:${BRAND.cream};padding:26px 24px 22px;border-bottom:4px solid ${BRAND.gold};"><img src="cid:apollo-logo" width="260" alt="Apollo Music Academy" style="display:block;width:260px;max-width:100%;height:auto;border:0;"></td></tr>`
+    + `<tr><td style="padding:30px 34px 14px;">${blocks.join('')}</td></tr>`
+    + `<tr><td align="center" bgcolor="${BRAND.cream}" style="background:${BRAND.cream};padding:18px 24px;font-family:${BODY_FONT};font-size:12.5px;color:${BRAND.slate};">Apollo Music Academy &middot; Free trial lessons in Chaska, MN</td></tr>`
+    + `</table></td></tr></table></body></html>`
 }
 
 // The studio's own Acuity booking page. `appointmentType` opens it on that instrument's free-trial lesson so the

@@ -231,7 +231,13 @@ function apolloSendQueuedEmails_() {
   (pulled.body.emails || []).forEach(function (email) {
     if (sentIds.indexOf(email.id) === -1) {
       try {
-        GmailApp.sendEmail(email.to, email.subject, email.text, { htmlBody: email.html, name: APOLLO_FROM_NAME });
+        const options = { htmlBody: email.html, name: APOLLO_FROM_NAME };
+        // The logo is attached to the message itself (not linked from a website), so mail apps have no
+        // "load remote content" prompt to show.
+        if (String(email.html).indexOf('cid:apollo-logo') !== -1) {
+          options.inlineImages = { 'apollo-logo': UrlFetchApp.fetch(APOLLO_BASE_URL + '/email/apollo-logo.png').getBlob().setName('apollo-logo.png') };
+        }
+        GmailApp.sendEmail(email.to, email.subject, email.text, options);
         sentIds.push(email.id);
         props.setProperty('apollo_sentIds', JSON.stringify(sentIds.slice(-100)));
       } catch (error) {
