@@ -1,0 +1,176 @@
+export type LeadStatus = 'active_student' | 'hot' | 'action_pending' | 'nurture' | 'nurture_long_term' | 'unresponsive' | 'unenrolled'
+export type ActivityType = 'call' | 'text' | 'email' | 'note' | 'status_change' | 'trial_update' | 'lead_created' | 'lead_update' | 'text_received' | 'call_received' | 'cadence_change'
+
+export interface Activity {
+  id: string
+  type: ActivityType
+  occurredAt: string
+  outcome: string
+}
+
+export interface Lead {
+  id: string
+  name: string
+  studentName?: string
+  phone: string
+  email: string
+  instruments: string[]
+  receivedAt: string
+  source: string
+  campaign: string
+  status: LeadStatus
+  activities: Activity[]
+  trialAt?: string
+  holdFormComplete: boolean
+  trialAttended: boolean
+  enrolledAt?: string
+  enrollmentAgreementSigned?: boolean
+  followUpAt?: string
+  followUpNote?: string
+  householdId?: string
+  cadenceShiftDays?: number
+  cadencePauseUntil?: string
+  cadencePauseStartedAt?: string
+}
+
+export interface DayWindow {
+  start: string
+  end: string
+  hotOnly?: boolean
+}
+
+export type Availability = DayWindow[]
+
+export interface TrialOpening {
+  id: string
+  instruments: string[]
+  instructor: string
+  startsAt: string
+}
+
+export interface Instructor {
+  id: string
+  name: string
+  instruments: string[]
+  acuityCalendarId?: string
+}
+
+export interface InstructorAvailability {
+  id: string
+  instructorId: string
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+}
+
+export type ScheduleEntryKind = 'regular' | 'trial' | 'one_time' | 'break' | 'vacation'
+
+export interface ScheduleEntry {
+  id: string
+  instructorId: string
+  leadId?: string
+  studentName: string
+  instrument: string
+  kind: ScheduleEntryKind
+  durationMinutes: 15 | 30 | 45 | 60 | 1440
+  dayOfWeek?: number
+  startTime?: string
+  startsAt?: string
+  startsOn?: string
+  endsOn?: string
+  skippedDates?: string[]
+  repeatIntervalWeeks?: 1 | 2
+}
+
+export interface ScheduleActivity {
+  id: string
+  occurredAt: string
+  action: string
+  instructor: string
+  details: string
+  studentName?: string
+}
+
+export type HoldStatus = 'active' | 'expired' | 'confirmed' | 'unmatched'
+
+export interface Hold {
+  id: string
+  leadId: string
+  instructorId: string
+  startsAt: string
+  durationMinutes: number
+  bookingLink: string
+  createdAt: string
+  expiresAt: string
+  status: HoldStatus
+  acuityAppointmentId?: string
+}
+
+export interface AcuityAppointmentSnapshot {
+  id?: string | number
+  datetime?: string
+  datetimeCreated?: string
+  calendarID?: string | number
+  firstName?: string
+  lastName?: string
+  email?: string
+  phone?: string
+}
+
+export interface AcuityEvent {
+  id: string
+  acuityAppointmentId?: string
+  eventType: string
+  appointment?: AcuityAppointmentSnapshot
+  receivedAt: string
+  handledAt?: string
+  handledAs?: string
+}
+
+export interface FeeCharge {
+  id: string
+  leadId: string
+  acuityAppointmentId?: string
+  amountCents: number
+  reason: 'no_show' | 'late_cancel'
+  status: 'succeeded' | 'failed' | 'waived'
+  failureMessage?: string
+  waivedReason?: string
+  createdAt: string
+}
+
+export interface IntakeParsed {
+  name: string
+  studentName?: string
+  email: string
+  phone: string
+  instruments: string[]
+  source: string
+  campaign: string
+  receivedAt: string
+  notes: string[]
+}
+
+export interface InboundLead {
+  id: string
+  source: 'meta' | 'formspree'
+  receivedAt: string
+  parsed: IntakeParsed
+  status: 'created' | 'needs_review' | 'merged' | 'failed' | 'dismissed'
+  matchedLeadId?: string
+  matchReason?: string
+  note?: string
+  createdAt: string
+}
+
+export interface OutboundEmail {
+  id: string
+  leadId: string
+  toEmail: string
+  subject: string
+  textBody: string
+  status: 'draft' | 'queued' | 'sending' | 'sent' | 'failed' | 'discarded'
+  error?: string
+  proposedTimes: { startsAt: string; label: string; instructor: string }[]
+  createdAt: string
+}
