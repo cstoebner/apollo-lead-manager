@@ -105,6 +105,14 @@ function onLeadChange(e) {
     processForm203Row_();
     processForm204Row_();
     processForm205Row_();
+
+  // Also hand the new row(s) to the Apollo app (see apollo-intake.js). Guarded so a problem there can never
+  // stop the alert emails above, and it does nothing until APOLLO_INTAKE_SECRET is set.
+  try {
+    apolloOnSheetChange();
+  } catch (error) {
+    Logger.log('Apollo intake failed: ' + error);
+  }
 }
 
 /**
