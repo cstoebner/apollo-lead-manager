@@ -1,6 +1,7 @@
 import type { Env } from './env'
 import { supabaseAdmin } from './supabaseAdmin'
 import { applyTemplate, defaultMessageTemplates } from '../../src/messageTemplates'
+import { addActivity } from './activities'
 import { entryTakesSlot, friendlyTime, type ScheduleEntryRow } from './chicago'
 
 type Db = ReturnType<typeof supabaseAdmin>
@@ -278,10 +279,13 @@ export async function createLeadFromIntake(env: Env, db: Db, settings: Settings,
   })
   if (leadError) throw new Error(`Could not create the lead: ${leadError.message}`)
 
-  const activities = [{ lead_id: leadId, type: 'lead_created', occurred_at: lead.receivedAt, outcome: 'New lead received (automatic intake)' }]
-  if (lead.notes.length) activities.push({ lead_id: leadId, type: 'note', occurred_at: lead.receivedAt, outcome: `From the form — ${lead.notes.join(' · ')}` })
+  const activities = [{ lead_id: leadId, owner_id: settings.ownerId, type: 'lead_created', occurred_at: lead.receivedAt, outcome: 'New lead received (automatic intake)' }]
+  if (lead.notes.length) activities.push({ lead_id: leadId, owner_id: settings.ownerId, type: 'note', occurred_at: lead.receivedAt, outcome: `From the form — ${lead.notes.join(' · ')}` })
   const { error: activityError } = await db.from('activities').insert(activities)
-  if (activityError) throw new Error(`Could not log the new lead: ${activityError.message}`)
+  if (activityError) {
+    await db.from('leads').delete().eq('id', leadId) // don't leave a half-created lead behind
+    throw new Error(`Could not log the new lead: ${activityError.message}`)
+  }
 
   let emailStatus: string | undefined
   if (lead.email) {
@@ -345,11 +349,9 @@ export async function resolveIntake(env: Env, inboundId: string, decision: 'same
     if (!row.matched_lead_id) throw new Error('There is no existing lead to merge this into.')
     const where = lead.source === 'Meta' ? 'Meta lead form' : 'website form'
     const details = [lead.studentName ? `Student: ${lead.studentName}` : '', lead.instruments.length ? `Instrument: ${lead.instruments.join(' / ')}` : '', ...lead.notes].filter(Boolean).join(' · ')
-    const activity = { id: crypto.randomUUID(), lead_id: row.matched_lead_id, type: 'note', occurred_at: lead.receivedAt, outcome: `Also submitted the ${where}${details ? ` — ${details}` : ''}` }
-    const { error: noteError } = await db.from('activities').insert(activity)
-    if (noteError) throw new Error(noteError.message)
+    const activity = await addActivity(db, row.matched_lead_id, 'note', `Also submitted the ${where}${details ? ` — ${details}` : ''}`, lead.receivedAt)
     await setInbound(db, inboundId, { status: 'merged', resolved_at: new Date().toISOString() })
-    return { status: 'merged' as const, leadId: row.matched_lead_id as string, activity: { id: activity.id, type: 'note', occurredAt: activity.occurred_at, outcome: activity.outcome } }
+    return { status: 'merged' as const, leadId: row.matched_lead_id as string, activity }
   }
 
   const settings = await loadSettings(db)

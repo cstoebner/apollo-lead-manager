@@ -1,6 +1,7 @@
 import type { Env } from '../../_shared/env'
 import { supabaseAdmin } from '../../_shared/supabaseAdmin'
 import { getStripeClient } from '../../_shared/stripeClient'
+import { addActivity } from '../../_shared/activities'
 import { withJsonErrors } from '../../_shared/handler'
 import { requireSignedInUser } from '../../_shared/auth'
 
@@ -59,12 +60,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
     failure_message: result.failureMessage,
   }).select().single()
 
-  await db.from('activities').insert({
-    lead_id: lead.id,
-    type: 'trial_update',
-    occurred_at: new Date().toISOString(),
-    outcome: result.status === 'succeeded' ? '$40 late-cancellation fee charged' : `$40 fee charge failed: ${result.failureMessage}`,
-  })
+  await addActivity(db, lead.id, 'trial_update', result.status === 'succeeded' ? '$40 late-cancellation fee charged' : `$40 fee charge failed: ${result.failureMessage}`)
 
   if (result.status === 'failed') return Response.json({ error: result.failureMessage, charge }, { status: 402 })
   return Response.json({ ok: true, charge })

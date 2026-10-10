@@ -1,6 +1,7 @@
 import type { Env } from '../_shared/env'
 import { supabaseAdmin } from '../_shared/supabaseAdmin'
 import { verifyStripeSignature } from '../_shared/stripe.live'
+import { addActivity } from '../_shared/activities'
 import { withJsonErrors } from '../_shared/handler'
 
 // Only handles charge.dispute.created -- the one Stripe event this app actually
@@ -23,12 +24,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
   const { data: charge } = await db.from('fee_charges').select('id, lead_id').eq('stripe_payment_intent_id', paymentIntentId).maybeSingle()
   if (!charge) return Response.json({ ok: true, warning: `No fee_charges row found for payment_intent ${paymentIntentId}` })
 
-  await db.from('activities').insert({
-    lead_id: charge.lead_id,
-    type: 'trial_update',
-    occurred_at: new Date().toISOString(),
-    outcome: `Dispute opened on the $40 late-cancellation charge (reason: ${event.data.object.reason ?? 'unknown'})`,
-  })
+  await addActivity(db, charge.lead_id, 'trial_update', `Dispute opened on the $40 late-cancellation charge (reason: ${event.data.object.reason ?? 'unknown'})`)
 
   return Response.json({ ok: true })
 })

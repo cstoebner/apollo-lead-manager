@@ -1,6 +1,7 @@
 import type { Env } from '../../_shared/env'
 import { requireIntakeSecret } from '../../_shared/intakeAuth'
 import { supabaseAdmin } from '../../_shared/supabaseAdmin'
+import { addActivity } from '../../_shared/activities'
 import { withJsonErrors } from '../../_shared/handler'
 
 const MAX_PER_PULL = 5
@@ -42,10 +43,7 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
     if (email.status === 'sent') return Response.json({ ok: true, alreadyLogged: true })
     await db.from('outbound_emails').update({ status: 'sent', sent_at: new Date().toISOString(), error: null }).eq('id', email.id)
     const times = ((email.proposed_times ?? []) as { label: string }[]).map((time) => time.label)
-    await db.from('activities').insert({
-      lead_id: email.lead_id, type: 'email', occurred_at: new Date().toISOString(),
-      outcome: `Day 0 email sent — "${email.subject}"${times.length ? ` · offered ${times.join(' and ')}` : ''} · with a Book now link`,
-    })
+    await addActivity(db, email.lead_id, 'email', `Day 0 email sent — "${email.subject}"${times.length ? ` · offered ${times.join(' and ')}` : ''} · with a Book now link`)
     return Response.json({ ok: true })
   }
   if (body.action === 'failed') {
