@@ -232,18 +232,22 @@ function toHtml(text: string, bookingLink: string) {
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a;max-width:560px;">${blocks.join('')}</div>`
 }
 
-export function bookingLinkFor(env: Env, appointmentTypeId: string, lead: IntakeLead) {
+// The studio's own Acuity booking page. `appointmentType` opens it on that instrument's free-trial lesson so the
+// family skips choosing one; the other params pre-fill the form.
+const BOOKING_PAGE = 'https://apollo-music-academy-booking.as.me/'
+
+export function bookingLinkFor(appointmentTypeId: string, lead: IntakeLead) {
   const [firstName, ...rest] = lead.name.split(' ')
-  const params = new URLSearchParams()
+  const params = new URLSearchParams({ appointmentType: appointmentTypeId })
   if (firstName) params.set('firstName', firstName)
   if (rest.length) params.set('lastName', rest.join(' '))
   if (lead.email) params.set('email', lead.email)
   if (lead.phone) params.set('phone', lead.phone)
-  return `https://app.acuityscheduling.com/schedule/${env.ACUITY_SCHEDULER_ID}/appointment/${appointmentTypeId}?${params.toString()}`
+  return `${BOOKING_PAGE}?${params.toString()}`
 }
 
-export function composeEmail(env: Env, templates: Record<string, string>, lead: IntakeLead, times: ProposedTime[], appointmentTypeId: string) {
-  const bookingLink = bookingLinkFor(env, appointmentTypeId, lead)
+export function composeEmail(templates: Record<string, string>, lead: IntakeLead, times: ProposedTime[], appointmentTypeId: string) {
+  const bookingLink = bookingLinkFor(appointmentTypeId, lead)
   const vars: Record<string, string> = {
     firstName: lead.name.split(' ')[0],
     instrument: lead.instruments.map((item) => item.toLowerCase()).join(' and '),
@@ -280,12 +284,12 @@ export async function createLeadFromIntake(env: Env, db: Db, settings: Settings,
   if (activityError) throw new Error(`Could not log the new lead: ${activityError.message}`)
 
   let emailStatus: string | undefined
-  if (lead.email && env.ACUITY_SCHEDULER_ID) {
+  if (lead.email) {
     const { data: types } = await db.from('acuity_appointment_types').select('instrument, appointment_type_id')
     const type = lead.instruments.map((item) => (types ?? []).find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
     if (type) {
       const times = await pickOpenings(db, lead.instruments)
-      const email = composeEmail(env, settings.templates, lead, times, type.appointment_type_id)
+      const email = composeEmail(settings.templates, lead, times, type.appointment_type_id)
       emailStatus = settings.autoSend ? 'queued' : 'draft'
       const { error: emailError } = await db.from('outbound_emails').insert({
         lead_id: leadId, inbound_lead_id: inboundId, kind: 'day0', to_email: lead.email, subject: email.subject, text_body: email.text, html_body: email.html,

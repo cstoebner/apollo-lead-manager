@@ -26,7 +26,8 @@ Apps Script sends from Conor's Gmail.
 - **Times offered:** first two flagged trial openings, ≥ 24 h away (within 45 days), for an instrument the lead
   asked for, with an Acuity-linked instructor and an `acuity_appointment_types` row; skipping openings taken by a
   lesson/break/vacation (recurrence ported in `functions/_shared/chicago.ts`) or an active/confirmed hold.
-  Fewer than two → the "no openings" template (booking link only).
+  Fewer than two → the "no openings" template (booking link only). The Book now link is
+  `https://apollo-music-academy-booking.as.me/?appointmentType=<id>` (pre-filled with the lead's details).
 - **Draft mode:** `intake_auto_send` defaults to false — every email waits for approval on the Today page.
 - **Idempotency:** `inbound_leads.external_id` is unique (Meta lead id / Gmail message id); retries are harmless.
 - **Cadence:** a sent email is logged as an `email` activity and does not advance the call/text cadence.
