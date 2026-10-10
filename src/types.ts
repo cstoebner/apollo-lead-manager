@@ -31,6 +31,8 @@ export interface Lead {
   cadenceShiftDays?: number
   cadencePauseUntil?: string
   cadencePauseStartedAt?: string
+  // Didn't opt in to texts on their form: still gets the initial outreach (Day 0-8) but is left out of the nurture campaign.
+  smsOptOut?: boolean
 }
 
 export interface DayWindow {
@@ -149,6 +151,7 @@ export interface IntakeParsed {
   campaign: string
   receivedAt: string
   notes: string[]
+  smsConsent?: 'yes' | 'no' | 'unknown'
 }
 
 export interface InboundLead {

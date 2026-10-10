@@ -23,6 +23,8 @@ export interface IntakeLead {
   campaign: string
   receivedAt: string
   notes: string[]
+  // From the form's text-message consent question, when it has one. 'no' keeps the lead out of the nurture campaign (initial outreach still applies).
+  smsConsent: 'yes' | 'no' | 'unknown'
 }
 
 const MIN_LEAD_TIME_HOURS = 24 // never offer a time that starts sooner than this
@@ -44,6 +46,15 @@ function pick(fields: Record<string, string>, ...keywords: string[]): string {
     if (wanted.some((keyword) => normalized.includes(keyword))) return String(value).trim()
   }
   return ''
+}
+// 'unknown' = the form has no consent question at all (e.g. the website form), so we don't assume a refusal.
+// A consent question that's missing an answer, or answered with anything other than a yes, counts as no.
+function smsConsentOf(fields: Record<string, string>): 'yes' | 'no' | 'unknown' {
+  const wanted = ['sms', 'text message'].map(normalizeKey)
+  const key = Object.keys(fields).find((name) => wanted.some((word) => normalizeKey(name).includes(word)))
+  if (key === undefined) return 'unknown'
+  const answer = String(fields[key] ?? '').replace(/_/g, ' ').trim().toLowerCase()
+  return /^(yes|y|true|checked|on|agree|i agree|opt.?in)\b/.test(answer) ? 'yes' : 'no'
 }
 const exact = (fields: Record<string, string>, key: string) => (blank(fields[key]) ? '' : String(fields[key]).trim())
 
@@ -103,7 +114,7 @@ export function normalizeIntake(input: IntakeInput, offeredInstruments: string[]
       name: contact, studentName: student && student.toLowerCase() !== contact.toLowerCase() ? student : undefined,
       email: exact(fields, 'email').toLowerCase(), phone: prettyPhone(exact(fields, 'phone')),
       instruments: matchInstruments(exact(fields, 'instrument'), offeredInstruments),
-      source: 'Website Traffic', campaign: 'Website inquiry', receivedAt, notes,
+      source: 'Website Traffic', campaign: 'Website inquiry', receivedAt, notes, smsConsent: smsConsentOf(fields),
     }
   }
   // Meta lead-ad sheet row
@@ -119,7 +130,7 @@ export function normalizeIntake(input: IntakeInput, offeredInstruments: string[]
     name: tidyName(pick(fields, 'full name', 'full_name') || `${first} ${last}`),
     email: pick(fields, 'email').toLowerCase(), phone: prettyPhone(pick(fields, 'phone')),
     instruments: matchInstruments(instrumentRaw, offeredInstruments),
-    source: 'Meta', campaign: exact(fields, '__form') || 'Lead ad', receivedAt, notes: instrumentRaw && !matchInstruments(instrumentRaw, offeredInstruments).length ? [`Instrument answer: ${instrumentRaw}`, ...notes] : notes,
+    source: 'Meta', campaign: exact(fields, '__form') || 'Lead ad', receivedAt, smsConsent: smsConsentOf(fields), notes: instrumentRaw && !matchInstruments(instrumentRaw, offeredInstruments).length ? [`Instrument answer: ${instrumentRaw}`, ...notes] : notes,
   }
 }
 
@@ -290,7 +301,7 @@ export async function refreshDraftEmails(env: Env, ids?: string[]): Promise<Refr
     const lead: IntakeLead = {
       name: leadRow.name, studentName: leadRow.student_name ?? undefined, email: leadRow.email ?? '', phone: leadRow.phone ?? '',
       instruments: leadRow.instruments?.length ? leadRow.instruments : leadRow.instrument ? [leadRow.instrument] : [],
-      source: 'Meta', campaign: '', receivedAt: new Date().toISOString(), notes: [],
+      source: 'Meta', campaign: '', receivedAt: new Date().toISOString(), notes: [], smsConsent: 'unknown',
     }
     const built = await buildDay0Email(db, settings, lead, types)
     if (!built) continue
@@ -318,11 +329,13 @@ export async function createLeadFromIntake(env: Env, db: Db, settings: Settings,
   const { error: leadError } = await db.from('leads').insert({
     id: leadId, owner_id: settings.ownerId, name: lead.name, student_name: lead.studentName ?? null, phone: lead.phone, email: lead.email,
     instrument: lead.instruments[0], instruments: lead.instruments, received_at: lead.receivedAt, source: lead.source, campaign: lead.campaign, status: 'hot',
+    sms_opt_out: lead.smsConsent === 'no',
   })
   if (leadError) throw new Error(`Could not create the lead: ${leadError.message}`)
 
   const activities = [{ lead_id: leadId, owner_id: settings.ownerId, type: 'lead_created', occurred_at: lead.receivedAt, outcome: 'New lead received (automatic intake)' }]
   if (lead.notes.length) activities.push({ lead_id: leadId, owner_id: settings.ownerId, type: 'note', occurred_at: lead.receivedAt, outcome: `From the form — ${lead.notes.join(' · ')}` })
+  if (lead.smsConsent === 'no') activities.push({ lead_id: leadId, owner_id: settings.ownerId, type: 'note', occurred_at: lead.receivedAt, outcome: "Didn't opt in to text messages on the form — they stay in the initial outreach but are left out of the nurture campaign." })
   const { error: activityError } = await db.from('activities').insert(activities)
   if (activityError) {
     await db.from('leads').delete().eq('id', leadId) // don't leave a half-created lead behind

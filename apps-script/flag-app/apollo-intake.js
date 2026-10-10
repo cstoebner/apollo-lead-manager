@@ -120,7 +120,8 @@ function apolloIngestMetaRows_() {
       const fields = { __form: tabName };
       headers.forEach(function (header, i) {
         const value = values[i];
-        if (value === '' || value === null || value === undefined) return;
+        // Keep a blank text-message consent column (as ''), so Apollo can tell "left it unticked" from "this form has no such question".
+        if (value === '' || value === null || value === undefined) { if (/sms|text.?message/i.test(String(header))) fields[String(header)] = ''; return; }
         fields[String(header)] = value instanceof Date ? value.toISOString() : String(value);
       });
       const idField = fields.id || fields.Id || fields.ID || (tabName + ':row' + row);

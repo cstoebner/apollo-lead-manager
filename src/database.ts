@@ -70,6 +70,7 @@ const leadFromRow = (row: any, activities: Activity[]): Lead => ({
   cadenceShiftDays: row.cadence_shift_days ?? undefined,
   cadencePauseUntil: row.cadence_pause_until ?? undefined,
   cadencePauseStartedAt: row.cadence_pause_started_at ?? undefined,
+  smsOptOut: Boolean(row.sms_opt_out),
 })
 
 const activityFromRow = (row: any): Activity => ({ id: row.id, type: row.type, occurredAt: row.occurred_at, outcome: row.outcome })
@@ -197,6 +198,7 @@ const leadRow = (lead: Lead) => ({
   cadence_shift_days: lead.cadenceShiftDays ?? null,
   cadence_pause_until: lead.cadencePauseUntil ?? null,
   cadence_pause_started_at: lead.cadencePauseStartedAt ?? null,
+  sms_opt_out: lead.smsOptOut ?? false,
 })
 
 export async function saveLead(lead: Lead) {
@@ -218,6 +220,7 @@ export async function updateLead(id: string, update: Partial<Lead>) {
   if ('cadenceShiftDays' in update) row.cadence_shift_days = update.cadenceShiftDays ?? null
   if ('cadencePauseUntil' in update) row.cadence_pause_until = update.cadencePauseUntil ?? null
   if ('cadencePauseStartedAt' in update) row.cadence_pause_started_at = update.cadencePauseStartedAt ?? null
+  if ('smsOptOut' in update) row.sms_opt_out = update.smsOptOut ?? false
   const { error } = await client().from('leads').update(row).eq('id', id)
   assertOk(error)
 }
