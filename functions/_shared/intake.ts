@@ -2,6 +2,7 @@ import type { Env } from './env'
 import { supabaseAdmin } from './supabaseAdmin'
 import { applyTemplate, defaultMessageTemplates } from '../../src/messageTemplates'
 import { addActivity } from './activities'
+import { buildAcuityBookingLink } from '../../src/acuityLink'
 import { entryTakesSlot, friendlyTime, type ScheduleEntryRow } from './chicago'
 
 type Db = ReturnType<typeof supabaseAdmin>
@@ -190,9 +191,11 @@ export async function findExistingLead(db: Db, lead: IntakeLead): Promise<Matche
 
 // ---------- offering times ----------
 
-export interface ProposedTime { startsAt: string; label: string; instructor: string }
+// `link` goes straight to this time with this teacher on Acuity, pre-filled with the family's details.
+export interface ProposedTime { startsAt: string; label: string; instructor: string; link?: string }
 
-export async function pickOpenings(db: Db, instruments: string[], now = Date.now()): Promise<ProposedTime[]> {
+export async function pickOpenings(db: Db, lead: IntakeLead, schedulerId?: string, now = Date.now()): Promise<ProposedTime[]> {
+  const instruments = lead.instruments
   const from = new Date(now + MIN_LEAD_TIME_HOURS * 3_600_000)
   const to = new Date(now + LOOKAHEAD_DAYS * 86_400_000)
   const wanted = instruments.map((item) => item.toLowerCase())
@@ -201,9 +204,10 @@ export async function pickOpenings(db: Db, instruments: string[], now = Date.now
     db.from('trial_openings').select('instructor_id, instruments, starts_at').gte('starts_at', from.toISOString()).lte('starts_at', to.toISOString()).order('starts_at', { ascending: true }).limit(300),
     db.from('instructors').select('id, name, instruments, acuity_calendar_id'),
     db.from('holds').select('instructor_id, starts_at, status').in('status', ['active', 'confirmed']).gte('starts_at', from.toISOString()).lte('starts_at', to.toISOString()),
-    db.from('acuity_appointment_types').select('instrument'),
+    db.from('acuity_appointment_types').select('instrument, appointment_type_id'),
   ])
-  const bookable = new Set((types ?? []).map((row) => row.instrument.toLowerCase()))
+  const typeIds = new Map((types ?? []).map((row) => [row.instrument.toLowerCase(), row.appointment_type_id as string]))
+  const bookable = new Set(typeIds.keys())
   const instructorsById = new Map((instructors ?? []).map((row) => [row.id, row]))
   const candidates = (openings ?? []).filter((opening) => {
     const instructor = instructorsById.get(opening.instructor_id)
@@ -224,7 +228,15 @@ export async function pickOpenings(db: Db, instruments: string[], now = Date.now
     const held = (holds ?? []).some((hold) => hold.instructor_id === opening.instructor_id && Date.parse(hold.starts_at) === start.getTime())
     const occupied = (entries as ScheduleEntryRow[] ?? []).some((entry) => entry.instructor_id === opening.instructor_id && entryTakesSlot(entry, start))
     if (held || occupied) continue
-    picked.push({ startsAt: start.toISOString(), label: friendlyTime(start), instructor: instructorsById.get(opening.instructor_id)!.name })
+    const instructor = instructorsById.get(opening.instructor_id)!
+    // The appointment type is per instrument: use the first thing the lead wants that this teacher teaches.
+    const teaches = (opening.instruments?.length ? opening.instruments : instructor.instruments ?? []).map((item: string) => item.toLowerCase())
+    const typeId = wanted.filter((item) => teaches.includes(item)).map((item) => typeIds.get(item)).find(Boolean)
+    const [firstName, ...rest] = lead.name.split(' ')
+    const link = schedulerId && typeId
+      ? buildAcuityBookingLink({ schedulerId, appointmentTypeId: typeId, calendarId: instructor.acuity_calendar_id!, startsAt: start, prefill: { firstName, lastName: rest.join(' '), email: lead.email || undefined, phone: lead.phone || undefined } })
+      : undefined
+    picked.push({ startsAt: start.toISOString(), label: friendlyTime(start), instructor: instructor.name, link })
     if (picked.length === OFFER_COUNT) break
   }
   return picked
@@ -242,17 +254,27 @@ const BRAND = { navy: '#1C3A64', blue: '#2F5FCE', gold: '#D9A441', cream: '#FFFA
 const BODY_FONT = "'Nunito Sans','Avenir Next','Segoe UI',Helvetica,Arial,sans-serif"
 const HEADING_FONT = "Fredoka,'Arial Rounded MT Bold','Avenir Next Rounded','Trebuchet MS',Helvetica,Arial,sans-serif"
 
-function toHtml(text: string, bookingLink: string) {
+function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
   const blocks = text.split(/\n{2,}/).map((block, index) => {
     const trimmed = block.trim()
     if (trimmed === bookingLink) {
-      return `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:6px auto 4px;"><tr><td align="center" bgcolor="${BRAND.blue}" style="background:${BRAND.blue};border-radius:26px;"><a href="${escapeHtml(bookingLink)}" style="display:inline-block;padding:15px 34px;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:26px;">Book my free trial now</a></td></tr></table>`
-        + `<p style="margin:12px 0 28px;text-align:center;font-family:${BODY_FONT};font-size:13px;color:${BRAND.slate};">Or go to <a href="${escapeHtml(bookingLink)}" style="color:${BRAND.blue};">apollo-music-academy-booking.as.me</a></p>`
+      // With specific times offered above, this is the "see everything" fallback, so it's a quieter outline button.
+      const secondary = times.length > 0
+      const label = secondary ? 'See all open times' : 'Book my free trial now'
+      const style = secondary
+        ? `display:inline-block;padding:12px 28px;font-family:${BODY_FONT};font-size:15px;font-weight:700;color:${BRAND.blue};text-decoration:none;border:2px solid ${BRAND.blue};border-radius:26px;`
+        : `display:inline-block;padding:15px 34px;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:26px;`
+      return `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:6px auto 4px;"><tr><td align="center" bgcolor="${secondary ? '#ffffff' : BRAND.blue}" style="background:${secondary ? '#ffffff' : BRAND.blue};border-radius:26px;"><a href="${escapeHtml(bookingLink)}" style="${style}">${label}</a></td></tr></table>`
+        + `<p style="margin:12px 0 28px;text-align:center;font-family:${BODY_FONT};font-size:13px;color:${BRAND.slate};">apollo-music-academy-booking.as.me</p>`
     }
     const lines = trimmed.split('\n')
     if (lines.every((line) => /^[0-9]\uFE0F?\u20E3/.test(line.trim()))) {
-      // "1️⃣ Wednesday, October 14 at 5:00 PM with Adam" -> a numbered row, without the emoji
-      const rows = lines.map((line) => `<tr><td style="padding:5px 0;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${BRAND.cream};border:1px solid #EDE6D8;border-radius:12px;"><tr><td width="44" align="center" style="padding:12px 0 12px 14px;"><div style="width:28px;height:28px;line-height:28px;border-radius:14px;background:${BRAND.blue};color:#ffffff;font-family:${BODY_FONT};font-size:14px;font-weight:700;text-align:center;">${escapeHtml(line.trim().charAt(0))}</div></td><td style="padding:12px 16px 12px 8px;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:${BRAND.navy};">${escapeHtml(line.trim().replace(/^[0-9]\uFE0F?\u20E3\s*/, ''))}</td></tr></table></td></tr>`).join('')
+      // "1️⃣ Wednesday, October 14 at 5:00 PM with Adam" -> a full-width button straight to that time
+      const rows = lines.map((line, row) => {
+        const label = escapeHtml(line.trim().replace(/^[0-9]\uFE0F?\u20E3\s*/, ''))
+        const link = times[row]?.link ?? bookingLink
+        return `<tr><td style="padding:5px 0;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center" bgcolor="${BRAND.blue}" style="background:${BRAND.blue};border-radius:14px;"><a href="${escapeHtml(link)}" style="display:block;padding:15px 18px;font-family:${BODY_FONT};font-size:16px;font-weight:700;line-height:1.35;color:#ffffff;text-decoration:none;border-radius:14px;">${label}</a></td></tr></table></td></tr>`
+      }).join('')
       return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:4px 0 18px;">${rows}</table>`
     }
     const body = escapeHtml(trimmed).replace(/\n/g, '<br>')
@@ -297,16 +319,19 @@ export function composeEmail(templates: Record<string, string>, lead: IntakeLead
   }
   const template = times.length >= OFFER_COUNT ? templates.intake_day0_email : templates.intake_day0_email_no_times
   const text = applyTemplate(template, vars)
-  return { subject: applyTemplate(templates.intake_day0_email_subject, vars), text, html: toHtml(text, bookingLink) }
+  // The plain-text version can't have buttons, so each numbered time is followed by its own link.
+  let row = 0
+  const plain = text.replace(/^([0-9]\uFE0F?\u20E3.*)$/gm, (line) => { const link = times[row++]?.link; return link ? `${line}\n${link}\n` : line }).replace(/\n{3,}/g, '\n\n')
+  return { subject: applyTemplate(templates.intake_day0_email_subject, vars), text: plain, html: toHtml(text, bookingLink, times) }
 }
 
 // Picks the openings and writes the email for a lead, using whatever is open right now. Returns null when the
 // lead's instrument has no Acuity trial type (so there's no booking link to send).
-export async function buildDay0Email(db: Db, settings: Settings, lead: IntakeLead, knownTypes?: { instrument: string; appointment_type_id: string }[]) {
+export async function buildDay0Email(env: Env, db: Db, settings: Settings, lead: IntakeLead, knownTypes?: { instrument: string; appointment_type_id: string }[]) {
   const types = knownTypes ?? (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
   const type = lead.instruments.map((item) => types.find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
   if (!type) return null
-  const times = await pickOpenings(db, lead.instruments)
+  const times = await pickOpenings(db, lead, env.ACUITY_SCHEDULER_ID)
   return { times, email: composeEmail(settings.templates, lead, times, type.appointment_type_id) }
 }
 
@@ -331,7 +356,7 @@ export async function refreshDraftEmails(env: Env, ids?: string[]): Promise<Refr
       instruments: leadRow.instruments?.length ? leadRow.instruments : leadRow.instrument ? [leadRow.instrument] : [],
       source: 'Meta', campaign: '', receivedAt: new Date().toISOString(), notes: [], smsConsent: 'unknown',
     }
-    const built = await buildDay0Email(db, settings, lead, types)
+    const built = await buildDay0Email(env, db, settings, lead, types)
     if (!built) continue
     const { error } = await db.from('outbound_emails')
       .update({ subject: built.email.subject, text_body: built.email.text, html_body: built.email.html, proposed_times: built.times, to_email: lead.email || undefined })
@@ -372,7 +397,7 @@ export async function createLeadFromIntake(env: Env, db: Db, settings: Settings,
 
   let emailStatus: string | undefined
   if (lead.email) {
-    const built = await buildDay0Email(db, settings, lead)
+    const built = await buildDay0Email(env, db, settings, lead)
     if (built) {
       emailStatus = settings.autoSend ? 'queued' : 'draft'
       const { error: emailError } = await db.from('outbound_emails').insert({
