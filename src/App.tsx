@@ -6,7 +6,8 @@ import { ApiError, callApi } from './api'
 import { activeFollowUpFor } from './activeTemplates'
 import { activeCadenceState, latestCadenceCheckpoint, nextContact, nextNurtureContact, nurtureCadenceState, nurtureRequiresCall, nurtureStartedAt, nurtureWeekFor } from './cadence'
 import { defaultAvailability, demoInstructorAvailability, demoInstructors, demoLeads, demoScheduleEntries, demoTrialOpenings } from './data'
-import { loadAcuityData, loadChangesSince, loadIntakeData, loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveIntakeAutoSend, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
+import { createBackup, saveBackupFile } from './backup'
+import { loadAcuityData, loadChangesSince, loadIntakeData, loadWorkspaceData, removeActivity as removeStoredActivity, removeLead as removeStoredLead, removeScheduleActivity as removeStoredScheduleActivity, saveActivity, saveIntakeAutoSend, saveLastBackup, saveLead, saveMessageTemplates, saveScheduleActivity, saveSettings, syncAvailability, syncEntries, syncInstructors, syncOpenings, updateLead } from './database'
 import type { WorkspaceData } from './database'
 import { applyTemplate, defaultMessageTemplates, messageTemplateGroups } from './messageTemplates'
 import { nurtureMessageFor } from './nurtureTemplates'
@@ -337,6 +338,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
   const [inboundLeads, setInboundLeads] = useState<InboundLead[]>([])
   const [outboundEmails, setOutboundEmails] = useState<OutboundEmail[]>([])
   const [intakeAutoSend, setIntakeAutoSend] = useState(false)
+  const [lastBackupAt, setLastBackupAt] = useState<string | undefined>(undefined)
   const changesSince = useRef(new Date(Date.now() - 2 * 60_000).toISOString())
   const [loadingData, setLoadingData] = useState(isSupabaseConfigured)
   const [dataError, setDataError] = useState('')
@@ -371,6 +373,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
       setOfferedInstruments(data.instruments?.length ? data.instruments : defaultInstruments)
       setMessageTemplateOverrides(data.messageTemplates ?? {})
       setIntakeAutoSend(Boolean(data.intakeAutoSend))
+      setLastBackupAt(data.lastBackupAt)
       setLoadingData(false)
       refreshAcuityData()
     }
@@ -452,6 +455,20 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refreshDrafts() }, 60_000)
     return () => window.clearInterval(timer)
   }, [hasDrafts])
+  // Weekly backup: every table as a CSV in one dated zip. Returns a short message for the card.
+  const runBackup = async (progress: (message: string) => void): Promise<string> => {
+    const result = await createBackup(progress)
+    const status = await saveBackupFile(result.blob, result.fileName)
+    if (status === 'cancelled') return 'Cancelled, nothing was saved.'
+    const now = new Date().toISOString()
+    setLastBackupAt(now)
+    persist(saveLastBackup(now))
+    const failed = result.counts.filter((item) => item.error)
+    const total = result.counts.reduce((sum, item) => sum + item.rows, 0)
+    return failed.length
+      ? `Saved ${result.fileName}, but ${failed.length} table${failed.length === 1 ? '' : 's'} couldn't be read (${failed.map((item) => item.table).join(', ')}). The README inside the file lists them.`
+      : `Saved ${result.fileName}: ${total.toLocaleString('en-US')} rows across ${result.counts.length} tables.`
+  }
   const changeIntakeAutoSend = (value: boolean) => {
     setIntakeAutoSend(value)
     persist(saveIntakeAutoSend(value))
@@ -1048,7 +1065,7 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
           <button className="primary" onClick={() => setShowNewLead(true)}>＋ New lead</button>
         </header>
 
-        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} inboundLeads={inboundLeads} outboundEmails={outboundEmails} onResolveInbound={resolveInbound} onEmailAction={emailAction} onRefreshEmail={(email) => void refreshDrafts(email.id)} onLinkSuggested={linkBooking} />}
+        {view === 'today' && <Today leads={leads} instructors={instructors} instructorAvailability={instructorAvailability} scheduleEntries={scheduleEntries} trialOpenings={trialOpenings} messageTemplates={messageTemplates} onSelect={setSelectedId} onLog={logActivity} onTextNow={startText} onTakeNote={setQuickNoteId} onResolveTrialYes={resolveTrialYes} onResolveTrialNo={resolveTrialNo} onResolveSecondTrial={resolveSecondTrial} onCollectSignature={resolveEnrollmentAgreement} onOverrideSignature={overrideEnrollmentAgreement} onResolveFollowUp={resolveFollowUp} onScheduleFollowUp={scheduleFollowUp} onBookTrial={scheduleTrialFromCall} onDeferFollowUp={(lead, context) => setDeferPromptFor({ lead, ...context })} onStatusChange={changeStatus} onClearTrial={clearTrial} holds={holds} onReleaseHold={releaseHold} onCreateHold={createHold} onSendHoldText={sendHoldText} acuityEvents={acuityEvents} onConfirmBooking={confirmBooking} onDeclineBooking={declineBooking} onLinkBooking={linkBooking} onApplyBookingChange={applyBookingChange} onCancelBooking={cancelBooking} onDismissEvent={dismissAcuityEvent} inboundLeads={inboundLeads} outboundEmails={outboundEmails} onResolveInbound={resolveInbound} onEmailAction={emailAction} onRefreshEmail={(email) => void refreshDrafts(email.id)} onLinkSuggested={linkBooking} lastBackupAt={lastBackupAt} onBackup={runBackup} />}
         {view === 'leads' && <LeadTable leads={leads} onSelect={setSelectedId} />}
         {view === 'openings' && <InstructorSchedule leads={leads} instructors={instructors} availability={instructorAvailability} entries={scheduleEntries} openings={trialOpenings} onAvailabilityChange={replaceAvailability} onEntriesChange={replaceEntries} onOpeningsChange={replaceOpenings} onScheduleLog={logScheduleActivity} onLeadTrialChange={updateTrial} onAcuitySync={syncAcuityBlock} />}
         {view === 'activity' && <ActivityLog leads={leads} instruments={offeredInstruments} instructors={instructors} scheduleActivities={scheduleActivities} onSelect={setSelectedId} onSaveActivity={saveManualActivity} onDelete={deleteActivity} onDeleteSchedule={deleteScheduleActivity} onInsertCadenceProgress={insertCadenceProgress} onAddLead={addLeadAwaitable} onEditActivity={editActivityFields} onEditScheduleActivity={editScheduleActivityFields} onBookTrial={bookTrialOnSchedule} />}
@@ -1264,7 +1281,7 @@ function CallOutcomeModal({ lead, instructors, instructorAvailability, scheduleE
   </div>
 }
 
-function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, acuityEvents, inboundLeads, outboundEmails, onResolveInbound, onEmailAction, onRefreshEmail, onLinkSuggested, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
+function Today({ leads, instructors, instructorAvailability, scheduleEntries, trialOpenings, messageTemplates, onSelect, onLog, onTextNow, onTakeNote, onResolveTrialYes, onResolveTrialNo, onResolveSecondTrial, onCollectSignature, onOverrideSignature, onResolveFollowUp, onScheduleFollowUp, onBookTrial, onDeferFollowUp, onStatusChange, onClearTrial, holds, onReleaseHold, onCreateHold, onSendHoldText, acuityEvents, inboundLeads, outboundEmails, onResolveInbound, onEmailAction, onRefreshEmail, onLinkSuggested, lastBackupAt, onBackup, onConfirmBooking, onDeclineBooking, onLinkBooking, onApplyBookingChange, onCancelBooking, onDismissEvent }: {
   holds: Hold[]
   onReleaseHold: (hold: Hold) => void
   onCreateHold: (lead: Lead, instructorId: string, startsAtIso: string) => Promise<{ error: string } | { reservation: string; link: string }>
@@ -1282,6 +1299,8 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
   onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void
   onRefreshEmail: (email: OutboundEmail) => void
   onLinkSuggested: (event: AcuityEvent, lead: Lead) => void
+  lastBackupAt?: string
+  onBackup: (progress: (message: string) => void) => Promise<string>
   leads: Lead[]
   instructors: Instructor[]
   instructorAvailability: InstructorAvailability[]
@@ -1427,6 +1446,7 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
     {acuityLink && <AcuityLinkModal lead={acuityLink.lead} instructor={acuityLink.instructor} startsAt={acuityLink.startsAt} onClose={() => setAcuityLink(null)} onCreate={onCreateHold} onSendText={(message, kind) => onSendHoldText(acuityLink.lead, message, acuityLink.startsAt, kind)} />}
     {linkEvent && <LinkBookingModal leads={leads} event={linkEvent} onClose={() => setLinkEvent(null)} onLink={(lead) => { onLinkBooking(linkEvent, lead); setLinkEvent(null) }} />}
     <PendingActions leads={pending} onSelect={onSelect} onLog={onLog} onLogCall={setCallOutcomeLead} onTextNow={onTextNow} onTakeNote={onTakeNote} onPromptYes={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'yes' })} onPromptNo={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'no' })} onPromptSecondTrial={(lead, reason) => setTrialPrompt({ lead, reason, decision: 'second_trial' })} onCollectSignature={onCollectSignature} onOverrideSignature={onOverrideSignature} onStatusChange={onStatusChange} />
+    {isSupabaseConfigured && <BackupCard lastBackupAt={lastBackupAt} onBackup={onBackup} />}
     <section className="card upcoming-outreach-card">
       <div className="section-head"><div><h2>Upcoming outreach</h2><p>A preview of the next days when you should plan to be available.</p></div></div>
       <div className="upcoming-outreach-list">{upcomingDays.map(({ date, items }) => {
@@ -1451,6 +1471,24 @@ function Today({ leads, instructors, instructorAvailability, scheduleEntries, tr
 }
 
 const isTrialPromptReason = (reason: PendingActionItem['reason']): reason is TrialPromptReason => reason === 'booking_form' || reason === 'trial_complete' || reason === 'became_student'
+
+function BackupCard({ lastBackupAt, onBackup }: { lastBackupAt?: string; onBackup: (progress: (message: string) => void) => Promise<string> }) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const days = lastBackupAt ? Math.floor((Date.now() - Date.parse(lastBackupAt)) / 86_400_000) : null
+  const due = days === null || days >= 7
+  const run = async () => {
+    setBusy(true); setMessage('Starting…')
+    try { setMessage(await onBackup(setMessage)) } catch (error) { setMessage(`Backup failed: ${(error as Error).message}`) } finally { setBusy(false) }
+  }
+  return <section className={`card backup-card${due ? ' due' : ''}`}>
+    <div className="section-head"><div>
+      <h2>Weekly backup</h2>
+      <p>{lastBackupAt ? `Last saved ${formatDate(lastBackupAt)}${days === 0 ? ' (today)' : days === 1 ? ' (yesterday)' : ` (${days} days ago)`}. ` : 'No backup has been saved yet. '}{due ? 'A new one is due.' : `Next one is due in ${7 - (days ?? 0)} day${7 - (days ?? 0) === 1 ? '' : 's'}.`}</p>
+    </div><button className={due ? 'primary' : 'secondary'} disabled={busy} onClick={() => void run()}>{busy ? 'Backing up…' : '⬇ Back up now'}</button></div>
+    {message && <p className="backup-message">{message}</p>}
+  </section>
+}
 
 function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction, onRefresh }: { inbound: InboundLead[]; emails: OutboundEmail[]; leads: Lead[]; onResolve: (inbound: InboundLead, decision: 'same' | 'different' | 'dismiss') => void; onEmailAction: (email: OutboundEmail, action: 'approve' | 'discard') => void; onRefresh: (email: OutboundEmail) => void }) {
   const [previewId, setPreviewId] = useState<string | null>(null)

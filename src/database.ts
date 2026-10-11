@@ -11,6 +11,7 @@ export interface WorkspaceData {
   instruments?: string[]
   messageTemplates?: Record<string, string>
   intakeAutoSend?: boolean
+  lastBackupAt?: string
 }
 
 const client = () => {
@@ -143,6 +144,7 @@ export async function loadWorkspaceData(): Promise<WorkspaceData> {
     instruments: settingsResult.data?.offered_instruments ?? undefined,
     messageTemplates: settingsResult.data?.message_templates ?? undefined,
     intakeAutoSend: Boolean(settingsResult.data?.intake_auto_send),
+    lastBackupAt: settingsResult.data?.last_backup_at ?? undefined,
   }
 }
 
@@ -401,5 +403,21 @@ export async function saveIntakeAutoSend(value: boolean) {
   assertOk(userError)
   if (!user) throw new Error('You are not signed in.')
   const { error } = await db.from('app_settings').upsert({ owner_id: user.id, intake_auto_send: value }, { onConflict: 'owner_id' })
+  assertOk(error)
+}
+
+// Every row of one table, for the weekly backup. A table this account can't read comes back as an error message
+// (shown in the backup's README) rather than silently disappearing from the file.
+export async function loadBackupTable(table: string, order: string): Promise<{ rows: Record<string, unknown>[]; error?: string }> {
+  const { data, error } = await fetchAllRows(client(), table, order, true)
+  return error ? { rows: [], error: error.message } : { rows: data ?? [] }
+}
+
+export async function saveLastBackup(iso: string) {
+  const db = client()
+  const { data: { user }, error: userError } = await db.auth.getUser()
+  assertOk(userError)
+  if (!user) throw new Error('You are not signed in.')
+  const { error } = await db.from('app_settings').upsert({ owner_id: user.id, last_backup_at: iso }, { onConflict: 'owner_id' })
   assertOk(error)
 }

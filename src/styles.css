@@ -64,3 +64,4 @@
 .toggle-row input[type=checkbox]:checked{background:#3f88eb}
 .toggle-row input[type=checkbox]:checked::after{transform:translateX(20px)}
 .toggle-row input[type=checkbox]:focus-visible{outline:2px solid #1c3a64;outline-offset:2px}
+.backup-card.due{border:1px solid #efd18b;background:#fff9e8}.backup-message{margin:0;padding:0 28px 18px;color:#244b76;font-size:13px;overflow-wrap:anywhere}
