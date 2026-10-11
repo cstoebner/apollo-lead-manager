@@ -260,7 +260,7 @@ function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
     if (trimmed === bookingLink) {
       // With specific times offered above, this is the "see everything" fallback, so it's a quieter outline button.
       const secondary = times.length > 0
-      const label = secondary ? 'See all open times' : 'Book my free trial now'
+      const label = secondary ? 'See all open lessons' : 'Book my free trial now'
       const style = secondary
         ? `display:inline-block;font-family:${BODY_FONT};font-size:15px;font-weight:700;color:${BRAND.blue};text-decoration:none;`
         : `display:inline-block;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;`
@@ -297,22 +297,22 @@ function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
     + `</td></tr></table></body></html>`
 }
 
-// The studio's own Acuity booking page. `appointmentType` opens it on that instrument's free-trial lesson so the
-// family skips choosing one; the other params pre-fill the form.
+// The studio's own Acuity booking page, showing every instrument's free trial: someone who asked about piano is free
+// to change their mind. The params pre-fill the form once they pick a lesson.
 const BOOKING_PAGE = 'https://apollo-music-academy-booking.as.me/'
 
-export function bookingLinkFor(appointmentTypeId: string, lead: IntakeLead) {
+export function bookingLinkFor(lead: IntakeLead) {
   const [firstName, ...rest] = lead.name.split(' ')
-  const params = new URLSearchParams({ appointmentType: appointmentTypeId })
+  const params = new URLSearchParams()
   if (firstName) params.set('firstName', firstName)
   if (rest.length) params.set('lastName', rest.join(' '))
   if (lead.email) params.set('email', lead.email)
   if (lead.phone) params.set('phone', lead.phone)
-  return `${BOOKING_PAGE}?${params.toString()}`
+  return params.size ? `${BOOKING_PAGE}?${params.toString()}` : BOOKING_PAGE
 }
 
-export function composeEmail(templates: Record<string, string>, lead: IntakeLead, times: ProposedTime[], appointmentTypeId: string) {
-  const bookingLink = bookingLinkFor(appointmentTypeId, lead)
+export function composeEmail(templates: Record<string, string>, lead: IntakeLead, times: ProposedTime[]) {
+  const bookingLink = bookingLinkFor(lead)
   const vars: Record<string, string> = {
     firstName: lead.name.split(' ')[0],
     instrument: lead.instruments.map((item) => item.toLowerCase()).join(' and '),
@@ -335,7 +335,7 @@ export async function buildDay0Email(env: Env, db: Db, settings: Settings, lead:
   const type = lead.instruments.map((item) => types.find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
   if (!type) return null
   const times = await pickOpenings(db, lead, env.ACUITY_SCHEDULER_ID)
-  return { times, email: composeEmail(settings.templates, lead, times, type.appointment_type_id) }
+  return { times, email: composeEmail(settings.templates, lead, times) }
 }
 
 export interface RefreshedEmail { id: string; subject: string; textBody: string; htmlBody: string; proposedTimes: ProposedTime[] }
