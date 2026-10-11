@@ -3,7 +3,9 @@ import { supabaseAdmin } from './supabaseAdmin'
 import { applyTemplate, defaultMessageTemplates } from '../../src/messageTemplates'
 import { addActivity } from './activities'
 import { buildAcuityBookingLink } from '../../src/acuityLink'
-import { entryTakesSlot, friendlyTime, type ScheduleEntryRow } from './chicago'
+import { getAcuityClient } from './acuityClient'
+import type { AcuityClient } from './acuityTypes'
+import { chicagoParts, entryTakesSlot, friendlyTime, type ScheduleEntryRow } from './chicago'
 
 type Db = ReturnType<typeof supabaseAdmin>
 
@@ -191,10 +193,44 @@ export async function findExistingLead(db: Db, lead: IntakeLead): Promise<Matche
 
 // ---------- offering times ----------
 
-// `link` goes straight to this time with this teacher on Acuity, pre-filled with the family's details.
-export interface ProposedTime { startsAt: string; label: string; instructor: string; link?: string }
+// ---------- checking times against Acuity ----------
 
-export async function pickOpenings(db: Db, lead: IntakeLead, schedulerId?: string, now = Date.now()): Promise<ProposedTime[]> {
+const parseAcuityTime = (value: string) => new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+const MAX_ACUITY_CHECKS = 6 // each distinct teacher/lesson/day costs one request; Cloudflare caps requests per invocation
+
+// Asks Acuity which start times it is actually offering the public for one teacher, lesson type and day. Answers are
+// cached in `cache` (shared across a whole refresh), so several candidate times on one day cost a single request.
+export interface AcuityChecker { acuity: AcuityClient; cache: Map<string, Date[] | null>; used: { count: number } }
+export function newAcuityChecker(env: Env, cache = new Map<string, Date[] | null>()): AcuityChecker | undefined {
+  // The mock (no live Acuity keys) knows nothing about real availability, so there is nothing to check against.
+  if (env.ACUITY_MODE === 'mock' || !env.ACUITY_USER_ID || !env.ACUITY_API_KEY) return undefined
+  return { acuity: getAcuityClient(env), cache, used: { count: 0 } }
+}
+
+// true = Acuity offers it; false = Acuity does not; null = couldn't find out (Acuity unreachable, or the check budget
+// is used up) -- the caller then falls back to what Apollo itself knows instead of holding up the email.
+export async function acuityOffers(checker: AcuityChecker, calendarId: string, typeId: string, start: Date): Promise<boolean | null> {
+  const date = chicagoParts(start).key
+  const key = `${calendarId}|${typeId}|${date}`
+  if (!checker.cache.has(key)) {
+    if (checker.used.count >= MAX_ACUITY_CHECKS) return null
+    checker.used.count += 1
+    try {
+      const times = await checker.acuity.listAvailableTimes({ date, appointmentTypeID: typeId, calendarID: calendarId })
+      checker.cache.set(key, times.map((item) => parseAcuityTime(item.time)))
+    } catch (error) {
+      console.warn('Acuity availability check failed:', error instanceof Error ? error.message : error)
+      checker.cache.set(key, null)
+    }
+  }
+  const times = checker.cache.get(key)
+  return times ? times.some((time) => time.getTime() === start.getTime()) : null
+}
+
+// `link` goes straight to this time with this teacher on Acuity, pre-filled with the family's details.
+export interface ProposedTime { startsAt: string; label: string; instructor: string; link?: string; verified?: boolean }
+
+export async function pickOpenings(db: Db, lead: IntakeLead, schedulerId?: string, checker?: AcuityChecker, now = Date.now()): Promise<ProposedTime[]> {
   const instruments = lead.instruments
   const from = new Date(now + MIN_LEAD_TIME_HOURS * 3_600_000)
   const to = new Date(now + LOOKAHEAD_DAYS * 86_400_000)
@@ -232,11 +268,19 @@ export async function pickOpenings(db: Db, lead: IntakeLead, schedulerId?: strin
     // The appointment type is per instrument: use the first thing the lead wants that this teacher teaches.
     const teaches = (opening.instruments?.length ? opening.instruments : instructor.instruments ?? []).map((item: string) => item.toLowerCase())
     const typeId = wanted.filter((item) => teaches.includes(item)).map((item) => typeIds.get(item)).find(Boolean)
+    // Ask Acuity itself whether this exact start time is bookable right now. Skip it if Acuity says no; if we can't
+    // find out, keep it (Apollo's own checks above already passed) but remember it wasn't confirmed.
+    let verified: boolean | undefined
+    if (checker && typeId) {
+      const offered = await acuityOffers(checker, instructor.acuity_calendar_id!, typeId, start)
+      if (offered === false) continue
+      verified = offered === true
+    }
     const [firstName, ...rest] = lead.name.split(' ')
     const link = schedulerId && typeId
       ? buildAcuityBookingLink({ schedulerId, appointmentTypeId: typeId, calendarId: instructor.acuity_calendar_id!, startsAt: start, prefill: { firstName, lastName: rest.join(' '), email: lead.email || undefined, phone: lead.phone || undefined } })
       : undefined
-    picked.push({ startsAt: start.toISOString(), label: friendlyTime(start), instructor: instructor.name, link })
+    picked.push({ startsAt: start.toISOString(), label: friendlyTime(start), instructor: instructor.name, link, verified })
     if (picked.length === OFFER_COUNT) break
   }
   return picked
@@ -330,11 +374,11 @@ export function composeEmail(templates: Record<string, string>, lead: IntakeLead
 
 // Picks the openings and writes the email for a lead, using whatever is open right now. Returns null when the
 // lead's instrument has no Acuity trial type (so there's no booking link to send).
-export async function buildDay0Email(env: Env, db: Db, settings: Settings, lead: IntakeLead, knownTypes?: { instrument: string; appointment_type_id: string }[]) {
+export async function buildDay0Email(env: Env, db: Db, settings: Settings, lead: IntakeLead, knownTypes?: { instrument: string; appointment_type_id: string }[], checker: AcuityChecker | undefined = newAcuityChecker(env)) {
   const types = knownTypes ?? (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
   const type = lead.instruments.map((item) => types.find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
   if (!type) return null
-  const times = await pickOpenings(db, lead, env.ACUITY_SCHEDULER_ID)
+  const times = await pickOpenings(db, lead, env.ACUITY_SCHEDULER_ID, checker)
   return { times, email: composeEmail(settings.templates, lead, times) }
 }
 
@@ -346,11 +390,12 @@ export interface RefreshedEmail { id: string; subject: string; textBody: string;
 export async function refreshDraftEmails(env: Env, ids?: string[]): Promise<RefreshedEmail[]> {
   const db = supabaseAdmin(env)
   const settings = await loadSettings(db)
-  let query = db.from('outbound_emails').select('id, lead_id').in('status', ['draft', 'failed']).order('created_at', { ascending: true }).limit(3)
-  if (ids?.length) query = query.in('id', ids.slice(0, 3))
+  let query = db.from('outbound_emails').select('id, lead_id').in('status', ['draft', 'failed']).order('created_at', { ascending: true }).limit(2)
+  if (ids?.length) query = query.in('id', ids.slice(0, 2))
   const { data: emails } = await query
   const types = (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
   const refreshed: RefreshedEmail[] = []
+  const checker = newAcuityChecker(env) // one shared cache: drafts for the same day/teacher/lesson share a single Acuity request
   for (const row of emails ?? []) {
     const { data: leadRow } = await db.from('leads').select('name, student_name, email, phone, instruments, instrument').eq('id', row.lead_id).single()
     if (!leadRow) continue
@@ -359,7 +404,7 @@ export async function refreshDraftEmails(env: Env, ids?: string[]): Promise<Refr
       instruments: leadRow.instruments?.length ? leadRow.instruments : leadRow.instrument ? [leadRow.instrument] : [],
       source: 'Meta', campaign: '', receivedAt: new Date().toISOString(), notes: [], smsConsent: 'unknown',
     }
-    const built = await buildDay0Email(env, db, settings, lead, types)
+    const built = await buildDay0Email(env, db, settings, lead, types, checker)
     if (!built) continue
     const { error } = await db.from('outbound_emails')
       .update({ subject: built.email.subject, text_body: built.email.text, html_body: built.email.html, proposed_times: built.times, to_email: lead.email || undefined })

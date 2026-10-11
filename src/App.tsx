@@ -1494,7 +1494,7 @@ function IntakeCards({ inbound, emails, leads, onResolve, onEmailAction, onRefre
         <div className="pending-person static"><span>
           <strong>{email.status === 'failed' ? 'Email not sent' : 'Email ready'} — {leadName(email.leadId)}</strong>
           <small>To {email.toEmail} · {email.subject}</small>
-          <small>{email.proposedTimes.length ? `Offering ${email.proposedTimes.map((time) => `${time.label} with ${time.instructor}`).join(' and ')}` : 'No openings to offer — booking link only'}</small>
+          <small>{email.proposedTimes.length ? `Offering ${email.proposedTimes.map((time) => `${time.label} with ${time.instructor}`).join(' and ')}` : 'No openings to offer — booking link only'}{email.proposedTimes.length > 0 && (email.proposedTimes.every((time) => time.verified) ? ' · ✓ checked against Acuity' : email.proposedTimes.some((time) => time.verified === false) ? ' · ⚠ couldn\'t confirm with Acuity' : '')}</small>
           {email.error && <small className="email-error">{email.error}</small>}
           {previewId === email.id && <iframe className="email-preview" title={`Preview of the email to ${leadName(email.leadId)}`} sandbox="" srcDoc={email.htmlBody.replace('cid:apollo-logo', '/email/apollo-logo.jpg')} />}
         </span></div>
