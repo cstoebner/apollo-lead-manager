@@ -17,4 +17,5 @@ None of those work? Reply with the days and times that do, or see everything tha
 https://apollo-music-academy-booking.as.me/?firstName=Sam&lastName=Example&email=test%40example.com&phone=612-555-9999
 
 Thanks,
-Conor
+Conor Stoebner
+Apollo Music Academy
