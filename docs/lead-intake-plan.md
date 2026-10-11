@@ -23,7 +23,7 @@ Apps Script sends from Conor's Gmail.
 ## Rules
 - **Duplicates:** same email or same phone (last 10 digits) as an existing lead → no lead, no email, a card asks
   "same lead?". Yes = note added to the original; No = new lead + email.
-- **Times offered:** first two flagged trial openings, ≥ 24 h away (within 45 days), for an instrument the lead
+- **Times offered:** first two flagged trial openings, ≥ 24 h away (Acuity's minimum notice is also 24 h) (within 29 days, since Acuity's maximum-days-in-advance is 30), for an instrument the lead
   asked for, with an Acuity-linked instructor and an `acuity_appointment_types` row; skipping openings taken by a
   lesson/break/vacation (recurrence ported in `functions/_shared/chicago.ts`) or an active/confirmed hold.
   Fewer than two → the "no openings" template (booking link only). The Book now link is

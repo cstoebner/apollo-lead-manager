@@ -30,7 +30,7 @@ export interface IntakeLead {
 
 const MIN_LEAD_TIME_HOURS = 24 // never offer a time that starts sooner than this
 const OFFER_COUNT = 2
-const LOOKAHEAD_DAYS = 45
+const LOOKAHEAD_DAYS = 29 // Acuity's "maximum days in advance" is 30; a later time has no working booking link
 
 // ---------- reading the fields ----------
 
