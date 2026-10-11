@@ -28,6 +28,7 @@ export function mockAcuityClient(): AcuityClient {
     }),
     listAppointments: async () => [],
     listBlocks: async (calendarID) => blocks.filter((block) => block.calendarID === calendarID),
+    listAvailableTimes: async () => [],
     createBlock: async (input) => {
       const block: AcuityBlock = { id: String(nextBlockId++), ...input }
       blocks.push(block)

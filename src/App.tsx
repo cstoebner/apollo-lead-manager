@@ -2789,6 +2789,7 @@ function InstructorSchedule({ leads, instructors, availability, entries, opening
 }
 
 type SyncLine = { name: string; text: string; failed?: boolean }
+type SlotReport = { slot: string; instructor: string; opening: boolean; liveBlocks: { id: string; start: string; end: string; trackedByApollo: boolean }[]; appointments: { time: string; name: string }[]; availability: { instrument: string; offered: boolean; times: string[] }[]; verdict: string[] }
 
 // Runs the same job as the nightly Acuity reconciliation, on demand -- for when blocks look wrong, or right
 // after linking an instructor or flagging a batch of openings. One request per instructor (each server call has
@@ -2797,6 +2798,22 @@ function AcuitySyncCard({ instructors }: { instructors: Instructor[] }) {
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<{ at: Date; lines: SyncLine[] } | null>(null)
   const linked = instructors.filter((item) => item.acuityCalendarId).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+  // "Why isn't this slot bookable on Acuity?" -- compares Apollo's records with what Acuity itself reports for one slot.
+  const [checkWho, setCheckWho] = useState('')
+  const [checkWhen, setCheckWhen] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [report, setReport] = useState<SlotReport | null>(null)
+  const [checkError, setCheckError] = useState('')
+  const checkSlot = async () => {
+    const instructorId = checkWho || linked[0]?.id
+    if (!instructorId || !checkWhen) return
+    setChecking(true); setReport(null); setCheckError('')
+    try {
+      setReport(await callApi<SlotReport>('/api/acuity-diagnose', { instructorId, startsAt: new Date(checkWhen).toISOString() }))
+    } catch (caught) {
+      setCheckError(caught instanceof Error ? caught.message : 'Could not check that slot.')
+    } finally { setChecking(false) }
+  }
   const run = async () => {
     setRunning(true); setResult(null)
     const lines: SyncLine[] = []
@@ -2812,7 +2829,14 @@ function AcuitySyncCard({ instructors }: { instructors: Instructor[] }) {
     }
     setRunning(false)
   }
-  return <div className="card setting-card"><h2>Acuity sync</h2><p>Re-blocks every linked instructor's Acuity calendar so only flagged trial openings (and active holds) can be booked. This also runs automatically every night; use it if blocks ever look wrong.</p><button className="secondary" disabled={running || !linked.length} onClick={() => void run()}>{running ? 'Syncing…' : '↻ Sync Acuity now'}</button>{!linked.length && <small>No instructors are linked to Acuity yet.</small>}{result && <div className="settings-instructor-list"><small>{running ? 'Working…' : `Finished ${result.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}</small>{result.lines.map((line) => <article key={line.name}><div><b>{line.name}</b><small>{line.text}</small></div></article>)}</div>}</div>
+  return <div className="card setting-card"><h2>Acuity sync</h2><p>Re-blocks every linked instructor's Acuity calendar so only flagged trial openings (and active holds) can be booked. This also runs automatically every night; use it if blocks ever look wrong.</p><button className="secondary" disabled={running || !linked.length} onClick={() => void run()}>{running ? 'Syncing…' : '↻ Sync Acuity now'}</button>{!linked.length && <small>No instructors are linked to Acuity yet.</small>}{result && <div className="settings-instructor-list"><small>{running ? 'Working…' : `Finished ${result.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`}</small>{result.lines.map((line) => <article key={line.name}><div><b>{line.name}</b><small>{line.text}</small></div></article>)}</div>}
+    <h3>Check a slot</h3><p>Something not showing as bookable on Acuity? Pick the teacher and time to see what Apollo and Acuity each say about it.</p>
+    <div className="field-pair"><label className="field">Teacher<select value={checkWho || linked[0]?.id || ''} onChange={(event) => setCheckWho(event.target.value)}>{linked.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field">Date and time<input type="datetime-local" step={900} value={checkWhen} onChange={(event) => setCheckWhen(event.target.value)} /></label></div>
+    <button className="secondary" disabled={checking || !checkWhen || !linked.length} onClick={() => void checkSlot()}>{checking ? 'Checking…' : 'Check this slot'}</button>
+    {checkError && <p className="auth-error">{checkError}</p>}
+    {report && <div className="settings-instructor-list"><article><div><b>{report.instructor} · {report.slot}</b>{report.verdict.map((line) => <small key={line}>{line}</small>)}</div></article>
+      <article><div><b>What Apollo has</b><small>{report.opening ? 'Flagged as a trial opening' : 'Not flagged as a trial opening'}</small></div></article>
+      <article><div><b>What Acuity has</b><small>{report.liveBlocks.length ? report.liveBlocks.map((block) => `Block ${block.id} (${block.trackedByApollo ? 'made by Apollo' : 'NOT made by Apollo'}): ${new Date(block.start).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} to ${new Date(block.end).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`).join(' · ') : 'No blocks covering this time'}</small>{report.appointments.map((item) => <small key={item.time + item.name}>Booked: {item.name} at {item.time}</small>)}{report.availability.map((item) => <small key={item.instrument}>{item.instrument} lesson — start times Acuity offers that day: {item.times.length ? item.times.join(', ') : 'none'} — {item.offered ? 'this time IS offered' : 'this time is NOT offered'}</small>)}</div></article></div>}</div>
 }
 
 function InstructorEditor({ instrumentOptions, instructor, lockedInstruments, calendarsInUse, onClose, onSave }: {
