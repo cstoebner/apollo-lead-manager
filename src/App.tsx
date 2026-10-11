@@ -1033,8 +1033,8 @@ function Workspace({ onSignOut }: { onSignOut?: () => void }) {
         <div className="logo"><img src={apolloLogoFull} alt="Apollo Lead Manager" /></div>
         <nav>
           <NavButton active={view === 'today'} onClick={() => setView('today')} icon="⌂" label="Today" />
-          <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
           <NavButton active={view === 'openings'} onClick={() => setView('openings')} icon="◫" label="Instructor schedule" />
+          <NavButton active={view === 'leads'} onClick={() => setView('leads')} icon="◎" label="All leads" />
           <NavButton active={view === 'activity'} onClick={() => setView('activity')} icon="≡" label="Activity log" />
           <NavButton active={view === 'settings'} onClick={() => setView('settings')} icon="⚙" label="Settings" />
         </nav>
