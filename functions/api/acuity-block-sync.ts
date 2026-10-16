@@ -4,6 +4,7 @@ import { getAcuityClient } from '../_shared/acuityClient'
 import { withJsonErrors } from '../_shared/handler'
 import { requireSignedInUser } from '../_shared/auth'
 import { openWindow } from '../_shared/blocks'
+import { findBookedTrialConflict } from '../_shared/bookedConflict'
 
 // Called by the client immediately after it flags/unflags a Trial Opening (the
 // existing grid toggle), to keep the corresponding Acuity block in sync. The
@@ -40,39 +41,10 @@ export const onRequestPost: PagesFunction<Env> = withJsonErrors(async (context) 
     return Response.json({ ok: true })
   }
 
-  const conflict = await findBookedTrialConflict(db, instructor.id, start, end)
+  const conflict = await findBookedTrialConflict(db, acuity, { id: instructor.id, name: instructor.name, calendarId: instructor.acuity_calendar_id }, start, end)
   if (conflict) return Response.json({ error: conflict }, { status: 409 })
 
   const block = await acuity.createBlock({ calendarID: instructor.acuity_calendar_id, start: start.toISOString(), end: end.toISOString(), notes: 'Apollo Lead Manager: not a trial slot' })
   await db.from('acuity_blocks').insert({ acuity_block_id: block.id, instructor_id: instructor.id, starts_at: start.toISOString(), ends_at: end.toISOString(), reason: 'unflagged' })
   return Response.json({ ok: true })
 })
-
-// Checks the two ways a trial can already be sitting in this exact window:
-// a confirmed Acuity-booked hold, or a trial lesson booked through the manual
-// in-app flow (schedule_entries kind='trial'). NOTE: this does not (yet) check
-// for a conflicting *recurring* lesson (schedule_entries kind='regular') -- that
-// needs the same day-of-week/biweekly-phase recurrence logic the client already
-// has in entryOccursOnDate, which is worth porting here as a follow-up rather
-// than duplicating by hand in this first pass.
-async function findBookedTrialConflict(db: ReturnType<typeof supabaseAdmin>, instructorId: string, start: Date, end: Date): Promise<string | null> {
-  const { data: confirmedHold } = await db.from('holds')
-    .select('id, lead_id')
-    .eq('instructor_id', instructorId)
-    .eq('status', 'confirmed')
-    .lt('starts_at', end.toISOString())
-    .gte('starts_at', start.toISOString())
-    .maybeSingle()
-  if (confirmedHold) return 'A trial is already booked in this window via Acuity. Not re-blocking it.'
-
-  const { data: bookedEntry } = await db.from('schedule_entries')
-    .select('id, student_name')
-    .eq('instructor_id', instructorId)
-    .eq('kind', 'trial')
-    .lt('starts_at', end.toISOString())
-    .gte('starts_at', start.toISOString())
-    .maybeSingle()
-  if (bookedEntry) return `${bookedEntry.student_name} already has a trial booked in this window. Not re-blocking it.`
-
-  return null
-}
