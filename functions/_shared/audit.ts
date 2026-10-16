@@ -70,7 +70,7 @@ export async function auditSetup(env: Env): Promise<AuditPart> {
         continue
       }
       if (type.active === false) findings.push({ severity: 'problem', area: instructor.name, message: `"${type.name}" is inactive in Acuity, so ${instrument} trials can't be booked.` })
-      if (type.private === true) findings.push({ severity: 'warning', area: instructor.name, message: `"${type.name}" is private in Acuity (hidden from the public page). Direct links still work, but "See all open lessons" won't list it.` })
+      if (type.private === true) findings.push({ severity: 'problem', area: instructor.name, message: `"${type.name}" is private in Acuity, so it's hidden from your public booking page and from "See all open lessons". Links to specific times for it have been unreliable; set it to public.` })
       if (type.calendarIDs && !type.calendarIDs.map(String).includes(calendarId)) {
         findings.push({ severity: 'problem', area: instructor.name, message: `"${type.name}" isn't assigned to ${instructor.name}'s calendar in Acuity, so ${instrument} trials can't be booked with them.` })
         continue
