@@ -1,0 +1,23 @@
+# A tiny standalone Worker whose only job is to call the two /api/cron/* routes
+# on the main Pages project on a schedule. Pages Functions (the functions/
+# directory) has no native scheduled() support -- Cron Triggers are a Worker
+# feature -- so this is the standard, documented way to get a cron trigger for
+# a Pages project. Deploy from the repo root with:
+#   ./node_modules/.bin/wrangler deploy --config cron-worker/wrangler.toml
+# and set its CRON_SECRET as an actual secret (not a plaintext var here) with:
+#   ./node_modules/.bin/wrangler secret put CRON_SECRET --config cron-worker/wrangler.toml
+# using the exact same value as the Pages project's CRON_SECRET (Settings ->
+# Environment variables), since this Worker sends it and the Function checks it.
+name = "apollo-lead-manager-cron"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[triggers]
+# All times UTC. Runs UTC 8:00am daily for reconciliation -- 2am CST / 3am CDT.
+# Cron Triggers don't shift for DST; this app's traffic is low enough that
+# reconciling an hour off from "exactly 2am Central" during the summer isn't
+# worth a second seasonal cron entry to fix.
+crons = ["*/10 * * * *", "0 8 * * *"]
+
+[vars]
+APP_BASE_URL = "https://apollo-lead-manager.pages.dev"

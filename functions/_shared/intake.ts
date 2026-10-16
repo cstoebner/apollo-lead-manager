@@ -1,0 +1,513 @@
+import type { Env } from './env'
+import { supabaseAdmin } from './supabaseAdmin'
+import { applyTemplate, defaultMessageTemplates } from '../../src/messageTemplates'
+import { addActivity } from './activities'
+import { buildAcuityBookingLink } from '../../src/acuityLink'
+import { getAcuityClient } from './acuityClient'
+import type { AcuityClient } from './acuityTypes'
+import { chicagoParts, entryTakesSlot, friendlyTime, type ScheduleEntryRow } from './chicago'
+
+type Db = ReturnType<typeof supabaseAdmin>
+
+// Automatic lead intake. A Google Apps Script posts each new Meta lead (a row from the Lead Ads sheet) or
+// Formspree email here; we normalize it, check for duplicates, create the lead, and queue a Day 0 email with
+// the first two flagged trial openings. See docs/lead-intake-plan.md.
+
+export type IntakeSource = 'meta' | 'formspree'
+export interface IntakeInput { source: IntakeSource; externalId: string; receivedAt?: string; fields: Record<string, string> }
+
+export interface IntakeLead {
+  name: string
+  studentName?: string
+  email: string
+  phone: string
+  instruments: string[]
+  source: 'Meta' | 'Website Traffic'
+  campaign: string
+  receivedAt: string
+  notes: string[]
+  // From the form's text-message consent question, when it has one. 'no' keeps the lead out of the nurture campaign (initial outreach still applies).
+  smsConsent: 'yes' | 'no' | 'unknown'
+}
+
+export const MIN_LEAD_TIME_HOURS = 24 // never offer a time that starts sooner than this
+const OFFER_COUNT = 2
+export const LOOKAHEAD_DAYS = 29 // Acuity's "maximum days in advance" is 30; a later time has no working booking link
+
+// ---------- reading the fields ----------
+
+const normalizeKey = (key: string) => ` ${key.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `
+const blank = (value: unknown) => value === undefined || value === null || String(value).trim() === ''
+
+// Whole-word match of any keyword against the field names -- Meta's column names vary by form
+// ("what_is_the_age_of_the_student"), so exact names can't be relied on. Same idea as the Flag App script.
+function pick(fields: Record<string, string>, ...keywords: string[]): string {
+  const wanted = keywords.map(normalizeKey)
+  for (const [key, value] of Object.entries(fields)) {
+    if (blank(value)) continue
+    const normalized = normalizeKey(key)
+    if (wanted.some((keyword) => normalized.includes(keyword))) return String(value).trim()
+  }
+  return ''
+}
+// 'unknown' = the form has no consent question at all (e.g. the website form), so we don't assume a refusal.
+// A consent question that's missing an answer, or answered with anything other than a yes, counts as no.
+function smsConsentOf(fields: Record<string, string>): 'yes' | 'no' | 'unknown' {
+  const wanted = ['sms', 'text message'].map(normalizeKey)
+  const key = Object.keys(fields).find((name) => wanted.some((word) => normalizeKey(name).includes(word)))
+  if (key === undefined) return 'unknown'
+  const answer = String(fields[key] ?? '').replace(/_/g, ' ').trim().toLowerCase()
+  return /^(yes|y|true|checked|on|agree|i agree|opt.?in)\b/.test(answer) ? 'yes' : 'no'
+}
+const exact = (fields: Record<string, string>, key: string) => (blank(fields[key]) ? '' : String(fields[key]).trim())
+
+// Meta delivers button/choice answers as slugs ("yes,_that's_fine"); free-text fields are left alone.
+const deslug = (value: string) => value.replace(/_/g, ' ').trim()
+
+const tidyName = (value: string) => {
+  const trimmed = value.replace(/\s+/g, ' ').trim()
+  if (trimmed !== trimmed.toLowerCase() && trimmed !== trimmed.toUpperCase()) return trimmed
+  return trimmed.toLowerCase().replace(/(^|[\s'-])([a-z])/g, (_, lead: string, letter: string) => lead + letter.toUpperCase())
+}
+
+export const digitsOf = (phone: string) => {
+  const digits = phone.replace(/\D/g, '')
+  return digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits
+}
+const prettyPhone = (phone: string) => {
+  const digits = digitsOf(phone)
+  return digits.length === 10 ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}` : phone.trim()
+}
+
+const INSTRUMENT_ALIASES: Record<string, string[]> = {
+  voice: ['vocal', 'vocals', 'voice', 'singing', 'sing'],
+  drums: ['drum', 'drums', 'percussion'],
+  saxophone: ['sax', 'saxophone'],
+  piano: ['piano', 'keyboard'],
+  guitar: ['guitar'],
+}
+
+function matchInstruments(raw: string, offered: string[]): string[] {
+  const text = ` ${raw.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `
+  return offered
+    .map((instrument) => {
+      const names = [instrument.toLowerCase(), ...(INSTRUMENT_ALIASES[instrument.toLowerCase()] ?? [])]
+      const positions = names.map((name) => text.indexOf(` ${name} `)).filter((index) => index >= 0)
+      return positions.length ? { instrument, at: Math.min(...positions) } : null
+    })
+    .filter((item): item is { instrument: string; at: number } => item !== null)
+    .sort((a, b) => a.at - b.at)
+    .map((item) => item.instrument)
+}
+
+export function normalizeIntake(input: IntakeInput, offeredInstruments: string[]): IntakeLead {
+  const fields = input.fields
+  const receivedAt = parseWhen(input.receivedAt) ?? parseWhen(pick(fields, 'created')) ?? new Date().toISOString()
+  if (input.source === 'formspree') {
+    const contact = tidyName(exact(fields, 'name'))
+    const student = tidyName(exact(fields, 'student_name'))
+    const notes = [
+      ['Student type', exact(fields, 'student_type')],
+      ['Experience', exact(fields, 'experience')],
+      ['Requested instructor', exact(fields, 'requested_instructor')],
+      ['Heard about us', exact(fields, 'flyer') || exact(fields, 'source')],
+      ['Message', exact(fields, 'notes')],
+    ].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`)
+    return {
+      name: contact, studentName: student && student.toLowerCase() !== contact.toLowerCase() ? student : undefined,
+      email: exact(fields, 'email').toLowerCase(), phone: prettyPhone(exact(fields, 'phone')),
+      instruments: matchInstruments(exact(fields, 'instrument'), offeredInstruments),
+      source: 'Website Traffic', campaign: 'Website inquiry', receivedAt, notes, smsConsent: smsConsentOf(fields),
+    }
+  }
+  // Meta lead-ad sheet row
+  const first = pick(fields, 'first name', 'first_name')
+  const last = pick(fields, 'last name', 'last_name')
+  const instrumentRaw = deslug(pick(fields, 'instrument'))
+  const notes = [
+    ['Student age', deslug(pick(fields, 'age'))],
+    ['SMS consent', deslug(pick(fields, 'sms', 'text message'))],
+    ['Can travel to Chaska', deslug(pick(fields, 'travel'))],
+  ].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`)
+  return {
+    name: tidyName(pick(fields, 'full name', 'full_name') || `${first} ${last}`),
+    email: pick(fields, 'email').toLowerCase(), phone: prettyPhone(pick(fields, 'phone')),
+    instruments: matchInstruments(instrumentRaw, offeredInstruments),
+    source: 'Meta', campaign: exact(fields, '__form') || 'Lead ad', receivedAt, smsConsent: smsConsentOf(fields), notes: instrumentRaw && !matchInstruments(instrumentRaw, offeredInstruments).length ? [`Instrument answer: ${instrumentRaw}`, ...notes] : notes,
+  }
+}
+
+function parseWhen(value?: string): string | undefined {
+  if (!value) return undefined
+  const time = Date.parse(value)
+  return Number.isNaN(time) ? undefined : new Date(time).toISOString()
+}
+
+// Returns a reason a lead can't be created automatically, or null if it's good to go.
+export function intakeProblem(lead: IntakeLead, rawInstrument: string): string | null {
+  if (!lead.name) return 'No name was found in the submission.'
+  if (!lead.email && !lead.phone) return 'No email or phone number was found in the submission.'
+  if (!lead.instruments.length) return `Couldn't tell which instrument they want${rawInstrument ? ` ("${rawInstrument}")` : ''}.`
+  return null
+}
+
+// ---------- settings ----------
+
+interface Settings { ownerId: string; offered: string[]; templates: Record<string, string>; autoSend: boolean }
+
+export async function loadSettings(db: Db): Promise<Settings> {
+  const { data, error } = await db.from('app_settings').select('owner_id, offered_instruments, message_templates, intake_auto_send').limit(1).maybeSingle()
+  if (error || !data) throw new Error(`Could not load app settings: ${error?.message ?? 'no settings row'}`)
+  return {
+    ownerId: data.owner_id,
+    offered: data.offered_instruments ?? [],
+    templates: { ...defaultMessageTemplates, ...(data.message_templates ?? {}) },
+    autoSend: Boolean(data.intake_auto_send),
+  }
+}
+
+// ---------- duplicates ----------
+
+export interface MatchedLead { id: string; name: string; student_name: string | null; email: string | null; phone: string | null; reason: string }
+
+export async function findExistingLead(db: Db, lead: IntakeLead): Promise<MatchedLead | null> {
+  const columns = 'id, name, student_name, email, phone'
+  const found = new Map<string, { row: Omit<MatchedLead, 'reason'>; email: boolean; phone: boolean }>()
+  const remember = (rows: Omit<MatchedLead, 'reason'>[] | null, kind: 'email' | 'phone') => {
+    for (const row of rows ?? []) found.set(row.id, { row, email: found.get(row.id)?.email || kind === 'email', phone: found.get(row.id)?.phone || kind === 'phone' })
+  }
+  if (lead.email) {
+    // ilike treats % and _ as wildcards; an over-match here is re-checked below.
+    const { data } = await db.from('leads').select(columns).ilike('email', lead.email.replace(/[\\%_]/g, '\\$&'))
+    remember((data ?? []).filter((row) => (row.email ?? '').trim().toLowerCase() === lead.email), 'email')
+  }
+  const digits = digitsOf(lead.phone)
+  if (digits.length >= 10) {
+    const { data } = await db.from('leads').select(columns).like('phone', `%${digits.slice(-4)}%`)
+    remember((data ?? []).filter((row) => digitsOf(row.phone ?? '') === digits), 'phone')
+  }
+  const best = [...found.values()].sort((a, b) => Number(b.email) + Number(b.phone) - (Number(a.email) + Number(a.phone)))[0]
+  if (!best) return null
+  return { ...best.row, reason: best.email && best.phone ? 'same email and phone number' : best.email ? 'same email address' : 'same phone number' }
+}
+
+// ---------- offering times ----------
+
+// ---------- checking times against Acuity ----------
+
+export const parseAcuityTime = (value: string) => new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+const MAX_ACUITY_CHECKS = 6 // each distinct teacher/lesson/day costs one request; Cloudflare caps requests per invocation
+
+// Asks Acuity which start times it is actually offering the public for one teacher, lesson type and day. Answers are
+// cached in `cache` (shared across a whole refresh), so several candidate times on one day cost a single request.
+export interface AcuityChecker { acuity: AcuityClient; cache: Map<string, Date[] | null>; used: { count: number } }
+export function newAcuityChecker(env: Env, cache = new Map<string, Date[] | null>()): AcuityChecker | undefined {
+  // The mock (no live Acuity keys) knows nothing about real availability, so there is nothing to check against.
+  if (env.ACUITY_MODE === 'mock' || !env.ACUITY_USER_ID || !env.ACUITY_API_KEY) return undefined
+  return { acuity: getAcuityClient(env), cache, used: { count: 0 } }
+}
+
+// true = Acuity offers it; false = Acuity does not; null = couldn't find out (Acuity unreachable, or the check budget
+// is used up) -- the caller then falls back to what Apollo itself knows instead of holding up the email.
+export async function acuityOffers(checker: AcuityChecker, calendarId: string, typeId: string, start: Date): Promise<boolean | null> {
+  const date = chicagoParts(start).key
+  const key = `${calendarId}|${typeId}|${date}`
+  if (!checker.cache.has(key)) {
+    if (checker.used.count >= MAX_ACUITY_CHECKS) return null
+    checker.used.count += 1
+    try {
+      const times = await checker.acuity.listAvailableTimes({ date, appointmentTypeID: typeId, calendarID: calendarId })
+      checker.cache.set(key, times.map((item) => parseAcuityTime(item.time)))
+    } catch (error) {
+      console.warn('Acuity availability check failed:', error instanceof Error ? error.message : error)
+      checker.cache.set(key, null)
+    }
+  }
+  const times = checker.cache.get(key)
+  return times ? times.some((time) => time.getTime() === start.getTime()) : null
+}
+
+// `link` goes straight to this time with this teacher on Acuity, pre-filled with the family's details.
+export interface ProposedTime { startsAt: string; label: string; instructor: string; link?: string; verified?: boolean }
+
+export async function pickOpenings(db: Db, lead: IntakeLead, schedulerId?: string, checker?: AcuityChecker, now = Date.now()): Promise<ProposedTime[]> {
+  const instruments = lead.instruments
+  const from = new Date(now + MIN_LEAD_TIME_HOURS * 3_600_000)
+  const to = new Date(now + LOOKAHEAD_DAYS * 86_400_000)
+  const wanted = instruments.map((item) => item.toLowerCase())
+
+  const [{ data: openings }, { data: instructors }, { data: holds }, { data: types }] = await Promise.all([
+    db.from('trial_openings').select('instructor_id, instruments, starts_at').gte('starts_at', from.toISOString()).lte('starts_at', to.toISOString()).order('starts_at', { ascending: true }).limit(300),
+    db.from('instructors').select('id, name, instruments, acuity_calendar_id'),
+    db.from('holds').select('instructor_id, starts_at, status').in('status', ['active', 'confirmed']).gte('starts_at', from.toISOString()).lte('starts_at', to.toISOString()),
+    db.from('acuity_appointment_types').select('instrument, appointment_type_id'),
+  ])
+  const typeIds = new Map((types ?? []).map((row) => [row.instrument.toLowerCase(), row.appointment_type_id as string]))
+  const bookable = new Set(typeIds.keys())
+  const instructorsById = new Map((instructors ?? []).map((row) => [row.id, row]))
+  const candidates = (openings ?? []).filter((opening) => {
+    const instructor = instructorsById.get(opening.instructor_id)
+    if (!instructor?.acuity_calendar_id) return false // can't be booked online without a linked Acuity calendar
+    const teaches = (opening.instruments?.length ? opening.instruments : instructor.instruments ?? []).map((item: string) => item.toLowerCase())
+    return wanted.some((item) => teaches.includes(item) && bookable.has(item))
+  })
+  if (!candidates.length) return []
+
+  const instructorIds = [...new Set(candidates.map((opening) => opening.instructor_id))]
+  const { data: entries } = await db.from('schedule_entries')
+    .select('instructor_id, kind, duration_minutes, day_of_week, start_time, starts_at, starts_on, ends_on, skipped_dates, repeat_interval_weeks')
+    .in('instructor_id', instructorIds)
+
+  const picked: ProposedTime[] = []
+  for (const opening of candidates) {
+    const start = new Date(opening.starts_at)
+    const held = (holds ?? []).some((hold) => hold.instructor_id === opening.instructor_id && Date.parse(hold.starts_at) === start.getTime())
+    const occupied = (entries as ScheduleEntryRow[] ?? []).some((entry) => entry.instructor_id === opening.instructor_id && entryTakesSlot(entry, start))
+    if (held || occupied) continue
+    const instructor = instructorsById.get(opening.instructor_id)!
+    // The appointment type is per instrument: use the first thing the lead wants that this teacher teaches.
+    const teaches = (opening.instruments?.length ? opening.instruments : instructor.instruments ?? []).map((item: string) => item.toLowerCase())
+    const typeId = wanted.filter((item) => teaches.includes(item)).map((item) => typeIds.get(item)).find(Boolean)
+    // Ask Acuity itself whether this exact start time is bookable right now. Skip it if Acuity says no; if we can't
+    // find out, keep it (Apollo's own checks above already passed) but remember it wasn't confirmed.
+    let verified: boolean | undefined
+    if (checker && typeId) {
+      const offered = await acuityOffers(checker, instructor.acuity_calendar_id!, typeId, start)
+      if (offered === false) continue
+      verified = offered === true
+    }
+    const [firstName, ...rest] = lead.name.split(' ')
+    const link = schedulerId && typeId
+      ? buildAcuityBookingLink({ schedulerId, appointmentTypeId: typeId, calendarId: instructor.acuity_calendar_id!, startsAt: start, prefill: { firstName, lastName: rest.join(' '), email: lead.email || undefined, phone: lead.phone || undefined } })
+      : undefined
+    picked.push({ startsAt: start.toISOString(), label: friendlyTime(start), instructor: instructor.name, link, verified })
+    if (picked.length === OFFER_COUNT) break
+  }
+  return picked
+}
+
+// ---------- the email ----------
+
+const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+// The email is built to open with nothing to "load": the layout is plain HTML tables with inline styles, and the one
+// image (the logo) is attached to the message itself (cid:apollo-logo, added by the Gmail script) rather than linked
+// from a website, so mail apps have no remote content to block. Web fonts can't be relied on in email, so the brand
+// fonts (Fredoka headings, Nunito Sans body) are listed first and fall back to similar rounded/clean system fonts.
+const BRAND = { navy: '#1C3A64', blue: '#2F5FCE', gold: '#D9A441', cream: '#FFFAF3', slate: '#5B6478', page: '#EFE9DD' }
+const BODY_FONT = "'Nunito Sans','Avenir Next','Segoe UI',Helvetica,Arial,sans-serif"
+const HEADING_FONT = "Fredoka,'Arial Rounded MT Bold','Avenir Next Rounded','Trebuchet MS',Helvetica,Arial,sans-serif"
+
+function toHtml(text: string, bookingLink: string, times: ProposedTime[] = []) {
+  const blocks = text.split(/\n{2,}/).map((block, index) => {
+    const trimmed = block.trim()
+    if (trimmed === bookingLink) {
+      // With specific times offered above, this is the "see everything" fallback, so it's a quieter outline button.
+      const secondary = times.length > 0
+      const label = secondary ? 'See all open lessons' : 'Book my free trial now'
+      const style = secondary
+        ? `display:inline-block;font-family:${BODY_FONT};font-size:15px;font-weight:700;color:${BRAND.blue};text-decoration:none;`
+        : `display:inline-block;font-family:${BODY_FONT};font-size:16px;font-weight:700;color:#ffffff;text-decoration:none;`
+      return `<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:6px auto 4px;"><tr><td align="center" bgcolor="${secondary ? '#ffffff' : BRAND.blue}" style="background:${secondary ? '#ffffff' : BRAND.blue};border-radius:26px;${secondary ? `border:2px solid ${BRAND.blue};padding:11px 28px;` : 'padding:15px 34px;'}"><a href="${escapeHtml(bookingLink)}" style="${style}">${label}</a></td></tr></table>`
+        + `<p style="margin:12px 0 28px;text-align:center;font-family:${BODY_FONT};font-size:13px;color:${BRAND.slate};">apollo-music-academy-booking.as.me</p>`
+    }
+    const lines = trimmed.split('\n')
+    if (lines.every((line) => /^[0-9]\uFE0F?\u20E3/.test(line.trim()))) {
+      // "1️⃣ Wednesday, October 14 at 5:00 PM with Adam" -> a full-width button straight to that time
+      const rows = lines.map((line, row) => {
+        const label = escapeHtml(line.trim().replace(/^[0-9]\uFE0F?\u20E3\s*/, ''))
+        const link = times[row]?.link ?? bookingLink
+        return `<tr><td style="padding:5px 0;"><table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center" bgcolor="${BRAND.blue}" style="background:${BRAND.blue};border-radius:14px;padding:15px 18px;"><a href="${escapeHtml(link)}" style="display:block;font-family:${BODY_FONT};font-size:16px;font-weight:700;line-height:1.35;color:#ffffff;text-decoration:none;">${label}</a></td></tr></table></td></tr>`
+      }).join('')
+      return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:4px 0 18px;">${rows}</table>`
+    }
+    const body = escapeHtml(trimmed).replace(/\n/g, '<br>')
+    if (index === 0 && /^Hi\b/i.test(trimmed)) {
+      return `<p style="margin:0 0 16px;font-family:${HEADING_FONT};font-size:24px;font-weight:600;line-height:1.25;color:${BRAND.navy};">${body}</p>`
+    }
+    return `<p style="margin:0 0 16px;font-family:${BODY_FONT};font-size:16px;line-height:1.6;color:${BRAND.slate};">${body}</p>`
+  })
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"></head>`
+    + `<body style="margin:0;padding:0;background:${BRAND.page};">`
+    + `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Your free trial lesson at Apollo Music Academy: pick a time or book right now.</div>`
+    + `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${BRAND.page};"><tr><td align="center" style="padding:24px 12px;">`
+    + `<!--[if mso]><table role="presentation" cellpadding="0" cellspacing="0" width="580" align="center"><tr><td><![endif]-->`
+    + `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:580px;background:#ffffff;border-radius:16px;overflow:hidden;">`
+    + `<tr><td align="center" bgcolor="${BRAND.cream}" style="background:${BRAND.cream};padding:26px 24px 22px;border-bottom:4px solid ${BRAND.gold};"><img src="cid:apollo-logo" width="260" alt="Apollo Music Academy" style="display:block;width:260px;max-width:100%;height:auto;border:0;"></td></tr>`
+    + `<tr><td style="padding:30px 34px 14px;">${blocks.join('')}</td></tr>`
+    + `<tr><td align="center" bgcolor="${BRAND.cream}" style="background:${BRAND.cream};padding:18px 24px;font-family:${BODY_FONT};font-size:12.5px;color:${BRAND.slate};">Apollo Music Academy &middot; Free trial lessons in Chaska, MN</td></tr>`
+    + `</table>`
+    + `<!--[if mso]></td></tr></table><![endif]-->`
+    + `</td></tr></table></body></html>`
+}
+
+// The studio's own Acuity booking page, showing every instrument's free trial: someone who asked about piano is free
+// to change their mind. The params pre-fill the form once they pick a lesson.
+const BOOKING_PAGE = 'https://apollo-music-academy-booking.as.me/'
+
+export function bookingLinkFor(lead: IntakeLead) {
+  const [firstName, ...rest] = lead.name.split(' ')
+  const params = new URLSearchParams()
+  if (firstName) params.set('firstName', firstName)
+  if (rest.length) params.set('lastName', rest.join(' '))
+  if (lead.email) params.set('email', lead.email)
+  if (lead.phone) params.set('phone', lead.phone)
+  return params.size ? `${BOOKING_PAGE}?${params.toString()}` : BOOKING_PAGE
+}
+
+export function composeEmail(templates: Record<string, string>, lead: IntakeLead, times: ProposedTime[]) {
+  const bookingLink = bookingLinkFor(lead)
+  const vars: Record<string, string> = {
+    firstName: lead.name.split(' ')[0],
+    instrument: lead.instruments.map((item) => item.toLowerCase()).join(' and '),
+    bookingLink,
+    time1: times[0] ? `${times[0].label} with ${times[0].instructor}` : '',
+    time2: times[1] ? `${times[1].label} with ${times[1].instructor}` : '',
+  }
+  const template = times.length >= OFFER_COUNT ? templates.intake_day0_email : templates.intake_day0_email_no_times
+  const text = applyTemplate(template, vars)
+  // The plain-text version can't have buttons, so each numbered time is followed by its own link.
+  let row = 0
+  const plain = text.replace(/^([0-9]\uFE0F?\u20E3.*)$/gm, (line) => { const link = times[row++]?.link; return link ? `${line}\n${link}\n` : line }).replace(/\n{3,}/g, '\n\n')
+  return { subject: applyTemplate(templates.intake_day0_email_subject, vars), text: plain, html: toHtml(text, bookingLink, times) }
+}
+
+// Picks the openings and writes the email for a lead, using whatever is open right now. Returns null when the
+// lead's instrument has no Acuity trial type (so there's no booking link to send).
+export async function buildDay0Email(env: Env, db: Db, settings: Settings, lead: IntakeLead, knownTypes?: { instrument: string; appointment_type_id: string }[], checker: AcuityChecker | undefined = newAcuityChecker(env)) {
+  const types = knownTypes ?? (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
+  const type = lead.instruments.map((item) => types.find((row) => row.instrument.toLowerCase() === item.toLowerCase())).find(Boolean)
+  if (!type) return null
+  const times = await pickOpenings(db, lead, env.ACUITY_SCHEDULER_ID, checker)
+  return { times, email: composeEmail(settings.templates, lead, times) }
+}
+
+export interface RefreshedEmail { id: string; subject: string; textBody: string; htmlBody: string; proposedTimes: ProposedTime[] }
+
+// Re-reads the schedule and rewrites emails that haven't gone out yet (drafts and failed sends), so a newly flagged
+// opening shows up in the preview and in what finally gets sent. Capped because each email costs several queries and
+// Cloudflare limits how many one request may make.
+export async function refreshDraftEmails(env: Env, ids?: string[]): Promise<RefreshedEmail[]> {
+  const db = supabaseAdmin(env)
+  const settings = await loadSettings(db)
+  let query = db.from('outbound_emails').select('id, lead_id').in('status', ['draft', 'failed']).order('created_at', { ascending: true }).limit(2)
+  if (ids?.length) query = query.in('id', ids.slice(0, 2))
+  const { data: emails } = await query
+  const types = (await db.from('acuity_appointment_types').select('instrument, appointment_type_id')).data ?? []
+  const refreshed: RefreshedEmail[] = []
+  const checker = newAcuityChecker(env) // one shared cache: drafts for the same day/teacher/lesson share a single Acuity request
+  for (const row of emails ?? []) {
+    const { data: leadRow } = await db.from('leads').select('name, student_name, email, phone, instruments, instrument').eq('id', row.lead_id).single()
+    if (!leadRow) continue
+    const lead: IntakeLead = {
+      name: leadRow.name, studentName: leadRow.student_name ?? undefined, email: leadRow.email ?? '', phone: leadRow.phone ?? '',
+      instruments: leadRow.instruments?.length ? leadRow.instruments : leadRow.instrument ? [leadRow.instrument] : [],
+      source: 'Meta', campaign: '', receivedAt: new Date().toISOString(), notes: [], smsConsent: 'unknown',
+    }
+    const built = await buildDay0Email(env, db, settings, lead, types, checker)
+    if (!built) continue
+    const { error } = await db.from('outbound_emails')
+      .update({ subject: built.email.subject, text_body: built.email.text, html_body: built.email.html, proposed_times: built.times, to_email: lead.email || undefined })
+      .eq('id', row.id).in('status', ['draft', 'failed'])
+    if (error) throw new Error(error.message)
+    refreshed.push({ id: row.id, subject: built.email.subject, textBody: built.email.text, htmlBody: built.email.html, proposedTimes: built.times })
+  }
+  return refreshed
+}
+
+// ---------- creating the lead ----------
+
+export interface IntakeOutcome { status: 'created' | 'needs_review' | 'failed' | 'already_processed'; leadId?: string; emailStatus?: string; note?: string }
+
+async function setInbound(db: Db, id: string, patch: Record<string, unknown>) {
+  const { error } = await db.from('inbound_leads').update(patch).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+// Creates the lead + its "new lead" activity + notes, and queues the Day 0 email (as a draft if auto-send is off).
+export async function createLeadFromIntake(env: Env, db: Db, settings: Settings, inboundId: string, lead: IntakeLead): Promise<IntakeOutcome> {
+  const leadId = crypto.randomUUID()
+  const { error: leadError } = await db.from('leads').insert({
+    id: leadId, owner_id: settings.ownerId, name: lead.name, student_name: lead.studentName ?? null, phone: lead.phone, email: lead.email,
+    instrument: lead.instruments[0], instruments: lead.instruments, received_at: lead.receivedAt, source: lead.source, campaign: lead.campaign, status: 'hot',
+    sms_opt_out: lead.smsConsent === 'no',
+  })
+  if (leadError) throw new Error(`Could not create the lead: ${leadError.message}`)
+
+  const activities = [{ lead_id: leadId, owner_id: settings.ownerId, type: 'lead_created', occurred_at: lead.receivedAt, outcome: 'New lead received (automatic intake)' }]
+  if (lead.notes.length) activities.push({ lead_id: leadId, owner_id: settings.ownerId, type: 'note', occurred_at: lead.receivedAt, outcome: `From the form — ${lead.notes.join(' · ')}` })
+  if (lead.smsConsent === 'no') activities.push({ lead_id: leadId, owner_id: settings.ownerId, type: 'note', occurred_at: lead.receivedAt, outcome: "Didn't opt in to text messages on the form — they stay in the initial outreach but are left out of the nurture campaign." })
+  const { error: activityError } = await db.from('activities').insert(activities)
+  if (activityError) {
+    await db.from('leads').delete().eq('id', leadId) // don't leave a half-created lead behind
+    throw new Error(`Could not log the new lead: ${activityError.message}`)
+  }
+
+  let emailStatus: string | undefined
+  if (lead.email) {
+    const built = await buildDay0Email(env, db, settings, lead)
+    if (built) {
+      emailStatus = settings.autoSend ? 'queued' : 'draft'
+      const { error: emailError } = await db.from('outbound_emails').insert({
+        lead_id: leadId, inbound_lead_id: inboundId, kind: 'day0', to_email: lead.email, subject: built.email.subject, text_body: built.email.text, html_body: built.email.html,
+        proposed_times: built.times, status: emailStatus,
+      })
+      if (emailError) throw new Error(`Could not queue the email: ${emailError.message}`)
+    }
+  }
+
+  await setInbound(db, inboundId, { status: 'created', lead_id: leadId, note: emailStatus ? null : lead.email ? 'No email queued (no Acuity trial type for this instrument).' : 'No email address, so no email was queued.', resolved_at: new Date().toISOString() })
+  return { status: 'created', leadId, emailStatus }
+}
+
+// ---------- the entry point ----------
+
+export async function processIntake(env: Env, input: IntakeInput): Promise<IntakeOutcome> {
+  const db = supabaseAdmin(env)
+  const settings = await loadSettings(db)
+  const lead = normalizeIntake(input, settings.offered)
+  const rawInstrument = input.source === 'formspree' ? exact(input.fields, 'instrument') : deslug(pick(input.fields, 'instrument'))
+
+  // Claim this submission first. The unique external_id is what makes a retried request harmless: a second
+  // attempt finds the row and stops, instead of creating another lead.
+  const { data: claimed, error: claimError } = await db.from('inbound_leads')
+    .insert({ source: input.source, external_id: input.externalId, received_at: lead.receivedAt, raw: input.fields, parsed: lead, status: 'failed', note: 'Processing was interrupted before it finished.' })
+    .select('id').single()
+  if (claimError) {
+    if (claimError.code === '23505') return { status: 'already_processed' }
+    throw new Error(claimError.message)
+  }
+
+  const problem = intakeProblem(lead, rawInstrument)
+  if (problem) { await setInbound(db, claimed.id, { status: 'failed', note: problem }); return { status: 'failed', note: problem } }
+
+  const match = await findExistingLead(db, lead)
+  if (match) {
+    await setInbound(db, claimed.id, { status: 'needs_review', matched_lead_id: match.id, match_reason: match.reason, note: null })
+    return { status: 'needs_review', leadId: match.id }
+  }
+  return createLeadFromIntake(env, db, settings, claimed.id, lead)
+}
+
+export async function resolveIntake(env: Env, inboundId: string, decision: 'same' | 'different' | 'dismiss') {
+  const db = supabaseAdmin(env)
+  const { data: row, error } = await db.from('inbound_leads').select('*').eq('id', inboundId).single()
+  if (error || !row) throw new Error('That submission was not found.')
+  if (row.status !== 'needs_review' && row.status !== 'failed') throw new Error('That submission has already been handled.')
+  const lead = row.parsed as IntakeLead
+
+  if (decision === 'dismiss') { await setInbound(db, inboundId, { status: 'dismissed', resolved_at: new Date().toISOString() }); return { status: 'dismissed' as const } }
+
+  if (decision === 'same') {
+    if (!row.matched_lead_id) throw new Error('There is no existing lead to merge this into.')
+    const where = lead.source === 'Meta' ? 'Meta lead form' : 'website form'
+    const details = [lead.studentName ? `Student: ${lead.studentName}` : '', lead.instruments.length ? `Instrument: ${lead.instruments.join(' / ')}` : '', ...lead.notes].filter(Boolean).join(' · ')
+    const activity = await addActivity(db, row.matched_lead_id, 'note', `Also submitted the ${where}${details ? ` — ${details}` : ''}`, lead.receivedAt)
+    await setInbound(db, inboundId, { status: 'merged', resolved_at: new Date().toISOString() })
+    return { status: 'merged' as const, leadId: row.matched_lead_id as string, activity }
+  }
+
+  const settings = await loadSettings(db)
+  const outcome = await createLeadFromIntake(env, db, settings, inboundId, lead)
+  return { ...outcome, status: 'created' as const }
+}

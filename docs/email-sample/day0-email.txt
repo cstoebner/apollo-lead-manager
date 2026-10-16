@@ -1,0 +1,21 @@
+Hi Sam,
+
+This is Conor with Apollo Music Academy. Thanks for reaching out about piano lessons!
+
+We offer a free 30-minute trial at World Learner School in Chaska. Weekly lessons afterward are $40 per 30 minutes.
+
+Tap the time you’d like to book and you’ll go straight to it:
+
+1️⃣ Wednesday, October 14 at 5:00 PM with Adam
+https://app.acuityscheduling.com/schedule/cd72e183/appointment/93643295/calendar/14653893/datetime/2026-10-14T17%3A00%3A00-05%3A00?calendarIds=14653893&firstName=Sam&lastName=Example&email=test%40example.com
+
+2️⃣ Thursday, October 15 at 6:30 PM with Luke
+https://app.acuityscheduling.com/schedule/cd72e183/appointment/93643295/calendar/14124874/datetime/2026-10-15T18%3A30%3A00-05%3A00?calendarIds=14124874&firstName=Sam&lastName=Example&email=test%40example.com
+
+None of those work? Reply with the days and times that do, or see everything that’s open for every instrument:
+
+https://apollo-music-academy-booking.as.me/?firstName=Sam&lastName=Example&email=test%40example.com&phone=612-555-9999
+
+Thanks,
+Conor Stoebner
+Apollo Music Academy
