@@ -65,3 +65,7 @@
 .toggle-row input[type=checkbox]:checked::after{transform:translateX(20px)}
 .toggle-row input[type=checkbox]:focus-visible{outline:2px solid #1c3a64;outline-offset:2px}
 .backup-card.due{border:1px solid #efd18b;background:#fff9e8}.backup-message{margin:0;padding:0 28px 18px;color:#244b76;font-size:13px;overflow-wrap:anywhere}
+.audit-progress{display:block;margin-top:8px;color:#66819e}.audit-summary{margin:14px 0 8px}.audit-checked{display:block;color:#66819e;margin:4px 0}
+.sev{display:inline-block;margin-right:6px;padding:1px 8px;border-radius:9px;font-size:11px;font-weight:700;letter-spacing:.02em}
+.sev-problem{background:#fae9e5;color:#a74435}.sev-warning{background:#fff1d0;color:#8a6a12}.sev-info{background:#e8eef5;color:#5b6478}
+.link-button{border:0;background:transparent;color:#3f88eb;font-weight:700;padding:0 0 0 8px;cursor:pointer}

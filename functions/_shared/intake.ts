@@ -30,9 +30,9 @@ export interface IntakeLead {
   smsConsent: 'yes' | 'no' | 'unknown'
 }
 
-const MIN_LEAD_TIME_HOURS = 24 // never offer a time that starts sooner than this
+export const MIN_LEAD_TIME_HOURS = 24 // never offer a time that starts sooner than this
 const OFFER_COUNT = 2
-const LOOKAHEAD_DAYS = 29 // Acuity's "maximum days in advance" is 30; a later time has no working booking link
+export const LOOKAHEAD_DAYS = 29 // Acuity's "maximum days in advance" is 30; a later time has no working booking link
 
 // ---------- reading the fields ----------
 
@@ -195,7 +195,7 @@ export async function findExistingLead(db: Db, lead: IntakeLead): Promise<Matche
 
 // ---------- checking times against Acuity ----------
 
-const parseAcuityTime = (value: string) => new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+export const parseAcuityTime = (value: string) => new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
 const MAX_ACUITY_CHECKS = 6 // each distinct teacher/lesson/day costs one request; Cloudflare caps requests per invocation
 
 // Asks Acuity which start times it is actually offering the public for one teacher, lesson type and day. Answers are

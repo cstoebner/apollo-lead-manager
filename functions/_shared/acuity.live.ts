@@ -32,6 +32,7 @@ export function liveAcuityClient(userId: string, apiKey: string): AcuityClient {
       return request<AcuityAppointment[]>('GET', `/appointments?${params.toString()}`)
     },
     listBlocks: (calendarID) => request<AcuityBlock[]>('GET', `/blocks?calendarID=${encodeURIComponent(calendarID)}`),
+    listAvailableDates: ({ month, appointmentTypeID, calendarID }) => request('GET', `/availability/dates?${new URLSearchParams({ month, appointmentTypeID, calendarID }).toString()}`),
     listAvailableTimes: ({ date, appointmentTypeID, calendarID }) => request('GET', `/availability/times?${new URLSearchParams({ date, appointmentTypeID, calendarID }).toString()}`),
     createBlock: (input) => request<AcuityBlock>('POST', '/blocks', input),
     // A block that's already gone from Acuity (deleted by hand, or by an earlier half-finished run) is the state
